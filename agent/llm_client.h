@@ -46,4 +46,14 @@ typedef struct {
 int llm_chat(const MessageList *messages, const char *system_prompt,
              const char *model, LLMResponse *out, char *err, size_t err_cap);
 
+/*
+ * Fetch available models from the LLM API.
+ *
+ *   out, out_cap:   buffer for newline-separated model id list
+ *   err, err_cap:   error buffer, filled on failure
+ *
+ * Returns 0 on success, -1 on any error.
+ */
+int fetch_models(char *out, size_t out_cap, char *err, size_t err_cap);
+
 #endif

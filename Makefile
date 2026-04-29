@@ -7,7 +7,7 @@ AGENT_SRCS := $(sort $(wildcard agent/*.c))
 TOOL_SRCS  := $(sort $(wildcard tools/*.c))
 UI_SRCS    := $(sort $(wildcard ui/*.c))
 
-SRCS := main.c config.c message.c util.c http.c \
+SRCS := main.c cmd.c config.c message.c util.c http.c \
         $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS)
 
 BUILD     := build

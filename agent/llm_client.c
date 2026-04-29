@@ -245,3 +245,85 @@ int llm_chat(const MessageList *messages, const char *system_prompt,
 
   return 0;
 }
+
+int fetch_models(char *out, size_t out_cap, char *err, size_t err_cap) {
+  char *header = xasprintf(
+      "GET /api/v1/models HTTP/1.1\r\n"
+      "Host: %s:%d\r\n"
+      "Authorization: Bearer %s\r\n"
+      "Connection: close\r\n"
+      "\r\n",
+      g_config.llm_host, g_config.llm_port, g_config.api_key);
+
+  int fd = tcp_connect(g_config.llm_host, g_config.llm_port, err, err_cap);
+  if (fd < 0) {
+    free(header);
+    return -1;
+  }
+  if (send_all(fd, header, strlen(header)) < 0) {
+    snprintf(err, err_cap, "Failed to send request");
+    free(header);
+    close(fd);
+    return -1;
+  }
+  free(header);
+
+  char *response = NULL;
+  size_t resp_len = 0;
+  if (recv_all(fd, 10, &response, &resp_len, err, err_cap) < 0) {
+    close(fd);
+    return -1;
+  }
+  close(fd);
+
+  int status;
+  const char *body;
+  if (http_parse_response(response, &status, &body) < 0) {
+    snprintf(err, err_cap, "Failed to parse HTTP response");
+    free(response);
+    return -1;
+  }
+  if (status != 200) {
+    snprintf(err, err_cap, "Server returned status %d", status);
+    free(response);
+    return -1;
+  }
+
+  cJSON *root = cJSON_Parse(body);
+  if (!root) {
+    snprintf(err, err_cap, "Failed to parse JSON");
+    free(response);
+    return -1;
+  }
+
+  cJSON *data = cJSON_GetObjectItem(root, "data");
+  if (!data || !cJSON_IsArray(data)) {
+    snprintf(err, err_cap, "Malformed response: missing 'data' array");
+    cJSON_Delete(root);
+    free(response);
+    return -1;
+  }
+
+  out[0] = '\0';
+  size_t pos = 0;
+  int count = cJSON_GetArraySize(data);
+  for (int i = 0; i < count; i++) {
+    cJSON *item = cJSON_GetArrayItem(data, i);
+    cJSON *id = cJSON_GetObjectItem(item, "id");
+    const char *name = id ? cJSON_GetStringValue(id) : NULL;
+    if (!name)
+      continue;
+    size_t len = strlen(name);
+    if (pos + len + 2 >= out_cap)
+      break;
+    if (pos > 0)
+      out[pos++] = '\n';
+    memcpy(out + pos, name, len);
+    pos += len;
+  }
+  out[pos] = '\0';
+
+  cJSON_Delete(root);
+  free(response);
+  return 0;
+}

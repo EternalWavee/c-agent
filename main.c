@@ -1,4 +1,5 @@
 #include "agent/agent.h"
+#include "cmd.h"
 #include "config.h"
 #include "ui/ui.h"
 
@@ -34,6 +35,10 @@ int main(void) {
     if(strcmp(input,"exit")==0||strcmp(input,"quit")==0||strcmp(input,"q")==0){
       break;
     }
+
+    if (cmd_dispatch(input))
+      continue;
+
     const char *reply = agent_chat(a, input);
     if (reply) {
       ui_idle();
