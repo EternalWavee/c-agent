@@ -155,8 +155,20 @@ const char *agent_chat(Agent *a, const char *user_input) {
   }
   free(a->last_reply);
   a->last_reply = resp.content ? resp.content : xstrdup("");
-  free(resp.raw_message);
-  free(resp.tool_calls); 
+  if (resp.raw_message)
+    msg_list_push(&a->history, resp.raw_message);
+  free(resp.tool_calls);
 
-  return a->last_reply;                                                                                                                               
+  return a->last_reply;
+}
+
+MessageList *agent_get_history(Agent *a) {
+  return &a->history;
+}
+
+void agent_clear_history(Agent *a) {
+  msg_list_free(&a->history);
+  msg_list_init(&a->history);
+  free(a->last_reply);
+  a->last_reply = NULL;
 }

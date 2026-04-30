@@ -33,6 +33,8 @@ void msg_list_push(MessageList *ml, char *json) {
 }
 
 void msg_list_free(MessageList *ml) {
+  if (!ml->items)
+    return;
   for (int i = 0; i < ml->len; i++)
     free(ml->items[i]);
   free(ml->items);

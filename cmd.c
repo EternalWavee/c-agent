@@ -1,7 +1,9 @@
 #include "cmd.h"
 
+#include "agent/agent.h"
 #include "agent/llm_client.h"
 #include "config.h"
+#include "session.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,7 +83,7 @@ static void render_model_menu(char **models, int count, int selected,
                               int show_hint) {
   for (int i = 0; i < count; i++) {
     if (i == selected)
-      printf("\033[7m"); /* inverse */
+      printf("\033[7m");
     printf("  %s  \033[0m\n", models[i]);
   }
   if (show_hint)
@@ -148,7 +150,6 @@ static int interactive_model_select(void) {
 
   disable_raw_mode();
 
-  /* clear menu area */
   printf("\033[%dB", count + 1);
   for (int i = 0; i <= count; i++)
     printf("\033[2K\n");
@@ -163,27 +164,133 @@ static int interactive_model_select(void) {
   return result;
 }
 
+/* --- Interactive session selector --- */
+
+static void render_session_menu(char **previews, int count, int selected) {
+  for (int i = 0; i < count; i++) {
+    if (i == selected)
+      printf("\033[7m");
+    printf("  %s  \033[0m\n", previews[i][0] ? previews[i] : "(empty)");
+  }
+  printf("\033[90m  \xE2\x86\x91\xE2\x86\x93 move  Enter restore  "
+         "Esc cancel\033[0m\n");
+  printf("\033[%dA", count + 1);
+  fflush(stdout);
+}
+
+static int interactive_session_select(Agent *a) {
+  char **paths, **previews;
+  int count;
+  if (session_list(&paths, &previews, &count) < 0 || count == 0) {
+    fprintf(stderr, "No saved sessions\n");
+    return -1;
+  }
+
+  int selected = 0;
+
+  if (enable_raw_mode() < 0) {
+    fprintf(stderr, "Failed to enable raw terminal mode\n");
+    session_list_free(paths, previews, count);
+    return -1;
+  }
+
+  render_session_menu(previews, count, selected);
+
+  int result = -1;
+  while (1) {
+    char c;
+    if (read(STDIN_FILENO, &c, 1) != 1)
+      break;
+
+    if (c == '\033') {
+      char seq[2];
+      if (read(STDIN_FILENO, &seq[0], 1) != 1)
+        break;
+      if (read(STDIN_FILENO, &seq[1], 1) != 1)
+        break;
+      if (seq[0] == '[') {
+        if (seq[1] == 'A' && selected > 0)
+          selected--;
+        else if (seq[1] == 'B' && selected < count - 1)
+          selected++;
+      }
+      render_session_menu(previews, count, selected);
+    } else if (c == '\r' || c == '\n') {
+      /* save current history before loading */
+      MessageList *cur = agent_get_history(a);
+      int cur_len = cur->len;
+      char **cur_items = cur->items;
+      cur->items = NULL;
+      cur->len = 0;
+      cur->cap = 0;
+
+      if (session_load(paths[selected], a) == 0) {
+        /* append current messages after old session's messages */
+        MessageList *hist = agent_get_history(a);
+        for (int i = 0; i < cur_len; i++)
+          msg_list_push(hist, cur_items[i]);
+        free(cur_items);
+
+        session_set_current(paths[selected]);
+        /* delete incomplete file A if different from restored file */
+        session_delete_other(paths[selected]);
+        result = 0;
+      } else {
+        /* restore failed, put current history back */
+        cur->items = cur_items;
+        cur->len = cur_len;
+        cur->cap = cur_len;
+      }
+      break;
+    } else if (c == 'q' || c == 'Q') {
+      break;
+    }
+  }
+
+  disable_raw_mode();
+
+  printf("\033[%dB", count + 1);
+  for (int i = 0; i <= count; i++)
+    printf("\033[2K\n");
+  printf("\033[%dA", count + 1);
+
+  if (result == 0)
+    printf("Session restored.\n");
+  else
+    printf("Cancelled.\n");
+
+  session_list_free(paths, previews, count);
+  return result;
+}
+
 /* --- Command implementations --- */
 
 static void cmd_model(void) {
   interactive_model_select();
 }
 
+static void cmd_session(Agent *a) {
+  interactive_session_select(a);
+}
+
 static void cmd_help(void) {
   printf("Commands:\n");
-  printf("  /model  Interactive model picker\n");
-  printf("  /help   Show this help\n");
+  printf("  /model    Interactive model picker\n");
+  printf("  /session  Browse and restore saved sessions\n");
+  printf("  /help     Show this help\n");
   printf("  exit/quit/q  Exit\n");
 }
 
 /* --- Dispatch --- */
 
-int cmd_dispatch(const char *input) {
+int cmd_dispatch(const char *input, Agent *a) {
   if (input[0] != '/')
     return 0;
 
   if (strcmp(input, "/model") == 0) {
     cmd_model();
+  } else if (strcmp(input, "/session") == 0) {
+    cmd_session(a);
   } else if (strcmp(input, "/help") == 0) {
     cmd_help();
   } else {
