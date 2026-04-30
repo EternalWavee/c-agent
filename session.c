@@ -135,12 +135,7 @@ int session_load(const char *path, Agent *a) {
   if (!root)
     return -1;
 
-  cJSON *model = cJSON_GetObjectItem(root, "model");
-  if (model) {
-    const char *m = cJSON_GetStringValue(model);
-    if (m)
-      snprintf(g_config.model, sizeof(g_config.model), "%s", m);
-  }
+  /* don't override current model — user may have switched it */
 
   cJSON *msgs = cJSON_GetObjectItem(root, "messages");
   if (!msgs || !cJSON_IsArray(msgs)) {
