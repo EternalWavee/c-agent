@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Project 2 test runner."""
+"""Project 2 test runner — discovers test_*.py files automatically.
+
+Works for both Part 1 and Part 2 test files. Any test_*.py file in this
+directory that exports a get_cases() function is discovered and included.
+Use --phase to filter by the phase tag on individual test cases.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ import importlib.util
 import json
 import os
 import sys
+from glob import glob
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -24,21 +30,14 @@ def _import_module(path: str):
     return mod
 
 
-_PHASES = {
-    "a": "test_phase_a.py",
-    "b": "test_phase_b.py",
-    "c": "test_phase_c.py",
-}
-
-
-def collect_cases(phases: list[str]) -> list[TestCase]:
+def collect_cases(phase_filter: str | None = None) -> list[TestCase]:
     cases: list[TestCase] = []
-    for ph in phases:
-        rel = _PHASES[ph]
-        path = os.path.join(_HERE, rel)
-        if os.path.isfile(path):
-            mod = _import_module(path)
-            cases.extend(mod.get_cases())
+    for path in sorted(glob(os.path.join(_HERE, "test_*.py"))):
+        mod = _import_module(path)
+        if hasattr(mod, "get_cases"):
+            for tc in mod.get_cases():
+                if phase_filter is None or tc.phase == phase_filter:
+                    cases.append(tc)
     return cases
 
 
@@ -67,10 +66,9 @@ def _format_text(results: list[TestResult]) -> str:
             total + r.case.points,
         )
 
-    for p in ("a", "b", "c"):
-        if p in by_phase:
-            earned, total = by_phase[p]
-            lines.append(f"Phase {p.upper()}:  {earned:>3} / {total}")
+    for p in sorted(by_phase):
+        earned, total = by_phase[p]
+        lines.append(f"Phase {p.upper()}:  {earned:>3} / {total}")
 
     lines.append(_SEP)
     total_earned = sum(e for e, _ in by_phase.values())
@@ -99,12 +97,11 @@ def _format_json(results: list[TestResult]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", default="./build/c-agent")
-    ap.add_argument("--phase", choices=["a", "b", "c"])
+    ap.add_argument("--phase", help="only run tests tagged with this phase")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    phases = [args.phase] if args.phase else ["a", "b", "c"]
-    cases = collect_cases(phases)
+    cases = collect_cases(args.phase)
     results = run_cases(cases, args.bin)
 
     if args.json:

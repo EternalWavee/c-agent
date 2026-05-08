@@ -116,12 +116,17 @@ def run_agent(
     timeout: float = DEFAULT_TIMEOUT,
     extra_env: Optional[Dict[str, str]] = None,
     extra_lines: Optional[List[str]] = None,
+    cwd: Optional[str] = None,
 ) -> AgentResult:
     """Spawn the agent binary, feed `prompt` (plus any `extra_lines`) on stdin,
     collect stdout/stderr, and return the result.
 
-    `extra_lines` lets Phase C tests submit multiple prompts in one session.
-    The harness always finishes with "exit" + EOF so Phase C REPLs terminate.
+    `extra_lines` lets multi-turn tests submit several prompts in one session.
+    The harness always finishes with "exit" + EOF so the REPL terminates.
+
+    `cwd` controls the working directory the agent runs in. File-tool tests
+    create a temporary workspace and pass it here so the agent's
+    g_config.workdir resolves to that directory.
     """
     env = {
         **os.environ,
@@ -139,13 +144,18 @@ def run_agent(
     else:
         stdin_text = prompt + "\n"
 
+    # Resolve binary to an absolute path before swapping cwd; otherwise a
+    # relative path like "build/c-agent" stops working when cwd changes.
+    bin_abs = os.path.abspath(binary)
+
     try:
         proc = subprocess.run(
-            [binary],
+            [bin_abs],
             input=stdin_text.encode("utf-8"),
             capture_output=True,
             timeout=timeout,
             env=env,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired as exc:
         raise AssertionError(
