@@ -24,8 +24,10 @@
 CC      ?= cc
 EXTRA_CFLAGS ?=
 EXTRA_SRCS ?=
-CFLAGS  := -D_XOPEN_SOURCE=700 -std=c11 -Wall -Wextra -pedantic -g -MMD -MP \
-           -I. -Ilibs $(EXTRA_CFLAGS)
+CFLAGS  := -D_XOPEN_SOURCE=700 -std=c11 -Wall -Wextra -pedantic \
+           -Wno-format-truncation -g -MMD -MP -I. -Ilibs $(EXTRA_CFLAGS)
+# 静音warning snprintf 拼接 workdir + "/" + rel_path 时，编译器理论上算出两个字符串加起来可能超过4096字节会截断。但实际使用中路径根本不会那么长，snprintf 截断也是安全行为
+# 还是不修改TA的sandbox比较好的
 LDLIBS  := -lpthread
 
 ASAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer

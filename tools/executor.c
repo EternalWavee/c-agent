@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 typedef struct {
     LLMToolCall *call;
@@ -54,6 +55,12 @@ static void run_one(ToolTask *task) {
     }
     ui_tool_done(task->index, task->result.ok, task->result.output);
 }
+
+
+static void *worker(void *arg) {
+      run_one((ToolTask *)arg);
+      return NULL;
+} 
 
 int executor_run_tools(
     LLMToolCall tool_calls[], int count, char *out_msgs[], char *err, size_t err_cap
@@ -101,8 +108,29 @@ int executor_run_tools(
      * The handout has the full sketch. Your tests under `make test-tsan`
      * decide whether you got the sync right.
      */
+
+    bool all_read_only = true;
+    if(count>1){
+        for(int i=0;i<count;i++){
+            if(!tasks[i].def||!tasks[i].def->read_only){
+                all_read_only = false;
+                break;
+            }
+        }
+    }
+
+    if(all_read_only){
+        pthread_t threads[count];
+        for(int i=0;i<count;i++)
+            pthread_create(&threads[i], NULL, worker, &tasks[i]);
+        for(int i=0;i<count;i++)
+            pthread_join(threads[i], NULL);
+    }else{
     for (int i = 0; i < count; i++)
         run_one(&tasks[i]);
+
+    }
+
 
     ui_idle();
 
