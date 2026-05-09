@@ -116,21 +116,19 @@ const char *agent_chat(Agent *a, const char *user_input) {
     for(int i=0;i<resp.n_tool_calls;i++){
       char * tool_msg;
       bool ok;
-      
-      if(strcmp(resp.tool_calls[i].name,BASH_TOOL_NAME)!=0){
-        ToolResult err_res;
-        err_res.ok = false;
-        err_res.output = xasprintf("unknown tool: %s", resp.tool_calls[i].name);
-        tool_msg = msg_tool_json(resp.tool_calls[i].id, err_res.output);
-        free(err_res.output);
-        ok = false;
-      }else{
-        ToolResult tr = bash_tool_exec(resp.tool_calls[i].args);
-        tool_msg = msg_tool_json(resp.tool_calls[i].id, tr.output ? tr.output : "");
-        ok = tr.ok;
-        ui_tool_done(i,ok,tr.output);
-        tool_result_free(&tr); 
-      }
+      ToolDef *def = tool_find(resp.tool_calls[i].name);
+       if(!def){                                                                                                                                       
+          char *errmsg = xasprintf("unknown tool: %s", resp.tool_calls[i].name);
+          tool_msg = msg_tool_json(resp.tool_calls[i].id, errmsg);
+          free(errmsg);
+          ok = false;                                                                                                                                 
+      } else { 
+          ToolResult tr = def->exec(resp.tool_calls[i].args);                                                                                         
+          tool_msg = msg_tool_json(resp.tool_calls[i].id, tr.output ? tr.output : "");                                                                
+          ok = tr.ok;                                                                                                                                 
+          ui_tool_done(i, ok, tr.output);                                                                                                             
+          tool_result_free(&tr);                                                                                                                      
+      }                                                                                                                                               
       msg_list_push(&a->history, tool_msg);
       // free(tool_msg);
     }

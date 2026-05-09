@@ -97,17 +97,23 @@ int llm_chat(const MessageList *messages, const char *system_prompt,
   }
   
   cJSON *tool_array = cJSON_CreateArray();
+  
+
+  int count;
+  ToolDef *const *tools = tool_list(&count);
+  for (int i=0;i<count;i++){
   cJSON *tool = cJSON_CreateObject();
   cJSON_AddStringToObject(tool,"type","function");
 
   cJSON *function = cJSON_CreateObject();
-  cJSON_AddStringToObject(function,"name",BASH_TOOL_NAME);
-  cJSON_AddStringToObject(function,"description",BASH_TOOL_DESC);
-  cJSON *params = cJSON_Parse(BASH_TOOL_SCHEMA);
+  cJSON_AddStringToObject(function,"name",tools[i]->name);
+  cJSON_AddStringToObject(function,"description",tools[i]->desc);
+  cJSON *params = cJSON_Parse(tools[i]->param_schema);
   cJSON_AddItemToObject(function, "parameters", params);
 
   cJSON_AddItemToObject(tool, "function", function);
   cJSON_AddItemToArray(tool_array, tool);
+  }
 
   cJSON_AddItemToObject(req, "messages", messages_array);
   cJSON_AddItemToObject(req, "tools", tool_array);

@@ -19,6 +19,25 @@ typedef struct {
 
 void tool_result_free(ToolResult *r);
 
+
+#define MAX_TOOL_OUTPUT 50000
+typedef ToolResult (*ToolFn)(cJSON *args);
+
+typedef struct {
+    const char *name;
+    const char *desc;
+    const char *param_schema;
+    ToolFn exec;
+    bool read_only;
+} ToolDef;
+
+#define MAX_REGISTERED_TOOLS 16
+
+void tools_init(void);
+void tool_register(ToolDef *def);
+ToolDef *tool_find(const char *name);
+ToolDef *const *tool_list(int *out_count);
+
 /* ── bash ─────────────────────────────────────────── */
 
 /* Tool schema fields — referenced by llm_client when building the request. */

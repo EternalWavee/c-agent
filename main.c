@@ -1,4 +1,5 @@
 #include "agent/agent.h"
+#include "tools/tools.h"
 #include "cmd.h"
 #include "config.h"
 #include "session.h"
@@ -14,6 +15,7 @@
 int main(void) {
   config_init();
 
+  tools_init();
   Agent *a = agent_create();
   if (!a) {
     fprintf(stderr, "agent_create failed\n");

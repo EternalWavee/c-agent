@@ -31,6 +31,10 @@
  */
 extern ToolDef bash_def;
 /* TODO(student, Phase A.3): declare your read/write/edit ToolDefs here. */
+extern ToolDef read_file_def;
+extern ToolDef write_file_def;
+extern ToolDef edit_file_def;
+
 
 static ToolDef *g_tools[MAX_REGISTERED_TOOLS];
 static int g_tools_count = 0;
@@ -43,6 +47,10 @@ void tools_init(void) {
     /* TODO(student, Phase A.3): register read_file_def, write_file_def,
        edit_file_def here, in this exact order so that test output is
        deterministic. */
+
+    tool_register(&read_file_def);
+    tool_register(&write_file_def);
+    tool_register(&edit_file_def);
 }
 
 void tool_register(ToolDef *def) {
