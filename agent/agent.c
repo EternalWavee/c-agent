@@ -12,6 +12,7 @@
 #include "llm_client.h"
 #include "message.h"
 #include "tools/tools.h"
+#include "tools/executor.h"
 #include "util.h"
 #include "ui/ui.h"
 
@@ -105,32 +106,23 @@ const char *agent_chat(Agent *a, const char *user_input) {
 
     msg_list_push(&a->history, resp.raw_message);
     resp.raw_message = NULL;
-    //执行tools
-    ToolCallView views[resp.n_tool_calls];
-    for(int i=0;i<resp.n_tool_calls;i++){
-      views[i].name = resp.tool_calls[i].name;
-      views[i].args_display = NULL;
-    }
-    ui_begin_tools(resp.n_tool_calls,views);
 
+    char *out_msgs[resp.n_tool_calls];
+    if(executor_run_tools(resp.tool_calls, resp.n_tool_calls, out_msgs, err, sizeof(err))<0){
+      fprintf(stderr, "executor error: %s\n", err);
+      free(resp.content);
+      free(resp.raw_message);
+      for(int i=0;i<resp.n_tool_calls;i++){
+        free(resp.tool_calls[i].id);
+        free(resp.tool_calls[i].name);
+        cJSON_Delete(resp.tool_calls[i].args);
+      }
+      free(resp.tool_calls);
+      msg_list_free(&a->history);
+      return NULL;
+    }
     for(int i=0;i<resp.n_tool_calls;i++){
-      char * tool_msg;
-      bool ok;
-      ToolDef *def = tool_find(resp.tool_calls[i].name);
-       if(!def){                                                                                                                                       
-          char *errmsg = xasprintf("unknown tool: %s", resp.tool_calls[i].name);
-          tool_msg = msg_tool_json(resp.tool_calls[i].id, errmsg);
-          free(errmsg);
-          ok = false;                                                                                                                                 
-      } else { 
-          ToolResult tr = def->exec(resp.tool_calls[i].args);                                                                                         
-          tool_msg = msg_tool_json(resp.tool_calls[i].id, tr.output ? tr.output : "");                                                                
-          ok = tr.ok;                                                                                                                                 
-          ui_tool_done(i, ok, tr.output);                                                                                                             
-          tool_result_free(&tr);                                                                                                                      
-      }                                                                                                                                               
-      msg_list_push(&a->history, tool_msg);
-      // free(tool_msg);
+      msg_list_push(&a->history, out_msgs[i]);
     }
     free(resp.content);
     free(resp.raw_message);                                                                                                                                                        
