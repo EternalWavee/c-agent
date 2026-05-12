@@ -126,7 +126,51 @@ ToolResult bash_tool_exec(cJSON *args) {
                       .output = final};
   }
 
-ToolResult tool_bash(cJSON *args){
+/* Dangerous command patterns — checked before execution. */
+static const char *DANGEROUS_PATTERNS[] = {
+    "rm -rf /",
+    "rm -rf /*",
+    "rm -rf ~",
+    "rm -rf .",
+    ":(){ :|:& };:",   /* fork bomb */
+    "mkfs.",
+    "dd if=/dev/zero",
+    "dd if=/dev/random",
+    "> /dev/sda",
+    "curl|sh",
+    "curl|bash",
+    "wget|sh",
+    "wget|bash",
+    "curl |sh",
+    "curl |bash",
+    "wget |sh",
+    "wget |bash",
+    "chmod -R 777 /",
+    "chmod 777 /",
+    "mv / /",
+    NULL,
+};
+
+static bool is_dangerous(const char *cmd) {
+  for (int i = 0; DANGEROUS_PATTERNS[i]; i++) {
+    if (strstr(cmd, DANGEROUS_PATTERNS[i]))
+      return true;
+  }
+  return false;
+}
+
+ToolResult tool_bash(cJSON *args) {
+  const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItem(args, "command"));
+  if (!cmd)
+    return (ToolResult){.ok = false,
+                        .output = xstrdup("missing 'command' argument")};
+
+  if (is_dangerous(cmd))
+    return (ToolResult){
+        .ok = false,
+        .output = xasprintf("BLOCKED: command '%s' is too dangerous to run", cmd),
+    };
+
   return bash_tool_exec(args);
 }
 
