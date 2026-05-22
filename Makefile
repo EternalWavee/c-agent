@@ -1,25 +1,19 @@
-# Project 2 (Part 2): Tool Registry & Parallel Execution.
+# Project 2 Part 3
 #
-# Layout assumptions:
-#   - All Part 1 carry-over files (main.c, config, http, message, util, ui)
-#     live next to this Makefile, unchanged.
-#   - Phase A introduces tools/ — registry, sandbox, executor, bash (reading
-#     material), plus contracts for the three file tools you create.
-#   - Phase B implementation lives in tools/executor.c. If students add
-#     helper sources, pass them through EXTRA_SRCS / EXTRA_CFLAGS.
+# Attention: merge this file with yours.
 #
 # Build modes:
-#   make          default, fully optimized for development (-g -O0)
-#   make asan     same files, AddressSanitizer + UBSan
-#   make tsan     same files, ThreadSanitizer
+#   make          development build (-g -O0)
+#   make asan     AddressSanitizer + UBSan
+#   make tsan     ThreadSanitizer
 #
 # Test modes:
-#   make test          all phases via tests/run_tests.py
-#   make test-a        Phase A only
-#   make test-b        Phase B only
-#   make test-asan     run all phases under ASan
-#   make test-tsan     run the C-level executor test under TSan
-#   make test-cunit    pure-C unit tests (registry, sandbox, executor races)
+#   make test           every phase via tests/run_tests.py
+#   make test-a/b       Part 2 phases
+#   make test-ca/cb     Part 3 phases
+#   make test-asan      whole tree under ASan
+#   make test-tsan      executor-level race tests
+#   make test-cunit     pure-C unit tests
 #
 CC      ?= cc
 EXTRA_CFLAGS ?=
@@ -38,9 +32,10 @@ TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer
 AGENT_SRCS := $(sort $(wildcard agent/*.c))
 TOOL_SRCS  := $(sort $(wildcard tools/*.c))
 UI_SRCS    := $(sort $(wildcard ui/*.c))
+CTX_SRCS   := $(sort $(wildcard context/*.c))
 
 CORE_SRCS  := main.c cmd.c session.c config.c message.c util.c http.c \
-              $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS)
+              $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS) $(CTX_SRCS)
 
 SRCS := $(CORE_SRCS) $(EXTRA_SRCS)
 
@@ -52,8 +47,10 @@ ASAN_TGT  := $(BUILD)/c-agent-asan
 TSAN_TGT  := $(BUILD)/c-agent-tsan
 
 .PHONY: all clean clean-objs \
-        test test-a test-b test-asan test-tsan test-agent-tsan \
+        test test-a test-b test-ca test-cb \
+        test-asan test-tsan test-agent-tsan \
         test-cunit test-cunit-parallel test-cunit-tsan \
+        test-cunit-offload test-cunit-summary \
         asan tsan
 
 # ── Default: build the agent binary ──────────────────────────────────────
@@ -85,7 +82,7 @@ tsan: clean-objs $(TSAN_TGT)
 $(TSAN_TGT): $(OBJS)
 	$(CC) $(CFLAGS) $(TSAN_FLAGS) -o $@ $^ $(LDLIBS)
 
-# ── Test entry points ────────────────────────────────────────────────────
+# ── Integration tests via the mock LLM server ───────────────────────────
 
 test: all
 	python3 tests/run_tests.py --bin ./$(TARGET)
@@ -96,6 +93,12 @@ test-a: all
 test-b: all
 	python3 tests/run_tests.py --bin ./$(TARGET) --phase b
 
+test-ca: all
+	python3 tests/run_tests.py --bin ./$(TARGET) --phase ca
+
+test-cb: all
+	python3 tests/run_tests.py --bin ./$(TARGET) --phase cb
+
 test-asan: asan
 	python3 tests/run_tests.py --bin ./$(ASAN_TGT)
 
@@ -104,43 +107,65 @@ test-tsan: test-cunit-tsan
 test-agent-tsan: tsan
 	python3 tests/run_tests.py --bin ./$(TSAN_TGT) --phase b
 
-# Pure-C unit tests live in tests/cunit/. They link directly against the
-# tool registry and executor so TSan can see the relevant pthread calls
-# without going through the Python harness.
-#
-#   test_registry, test_sandbox: pure logic, no threads. Run as part of the
-#                                Phase A workflow.
-#   test_executor:               drives the parallel executor under
-#                                ASan/TSan. Depends on the Phase A.6
-#                                read_only field and the Phase B executor
-#                                edit.
+# ── Pure-C unit tests ───────────────────────────────────────────────────
 
-define cunit_link
+CUNIT_CORE  := config.c message.c util.c
+CUNIT_TOOLS := tools/registry.c tools/sandbox.c \
+               tools/bash.c tools/read.c tools/write.c tools/edit.c
+CUNIT_CTX_BASE := context/context.c context/token.c
+
+define cunit_link_simple
 $(CC) $(CFLAGS) $(1) tests/cunit/$(2).c \
-    config.c message.c util.c \
-    tools/registry.c tools/sandbox.c \
-    tools/bash.c tools/read.c tools/write.c tools/edit.c \
+    $(CUNIT_CORE) $(CUNIT_TOOLS) \
     libs/cJSON.c \
     -o $(BUILD)/cunit-$(3)/$(2) $(LDLIBS)
 endef
 
 define cunit_link_executor
 $(CC) $(CFLAGS) $(1) tests/cunit/test_executor.c \
-    config.c message.c util.c \
-    tools/registry.c tools/sandbox.c tools/executor.c \
-    tools/bash.c tools/read.c tools/write.c tools/edit.c \
+    $(CUNIT_CORE) $(CUNIT_TOOLS) tools/executor.c \
     ui/ui.c ui/render.c \
     libs/cJSON.c $(EXTRA_SRCS) \
     -o $(BUILD)/cunit-$(2)/test_executor $(LDLIBS)
+endef
+
+define cunit_link_offload
+$(CC) $(CFLAGS) $(1) tests/cunit/test_offload.c \
+    $(CUNIT_CORE) $(CUNIT_CTX_BASE) context/policy_offload.c \
+    libs/cJSON.c \
+    -o $(BUILD)/cunit-$(2)/test_offload $(LDLIBS)
+endef
+
+define cunit_link_summary
+$(CC) $(CFLAGS) $(1) tests/cunit/test_summary.c tests/cunit/fake_summarizer.c \
+    $(CUNIT_CORE) $(CUNIT_CTX_BASE) context/policy_summary.c \
+    libs/cJSON.c \
+    -o $(BUILD)/cunit-$(2)/test_summary $(LDLIBS)
 endef
 
 test-cunit:
 	@mkdir -p $(BUILD)/cunit-asan
 	@for bn in test_registry test_sandbox; do \
 	  echo "  CC   $$bn (asan)"; \
-	  $(call cunit_link,$(ASAN_FLAGS),$$bn,asan) || exit 1; \
+	  $(call cunit_link_simple,$(ASAN_FLAGS),$$bn,asan) || exit 1; \
 	  $(BUILD)/cunit-asan/$$bn || exit 1; \
 	done
+	@echo "  CC   test_offload (asan)"
+	@$(call cunit_link_offload,$(ASAN_FLAGS),asan) && $(BUILD)/cunit-asan/test_offload
+	@echo "  CC   test_summary (asan)"
+	@$(call cunit_link_summary,$(ASAN_FLAGS),asan) && $(BUILD)/cunit-asan/test_summary
+
+test-cunit-offload:
+	@mkdir -p $(BUILD)/cunit-asan
+	@echo "  CC   test_offload (asan)"
+	@$(call cunit_link_offload,$(ASAN_FLAGS),asan)
+	@$(BUILD)/cunit-asan/test_offload
+
+test-cunit-summary:
+	@mkdir -p $(BUILD)/cunit-asan
+	@echo "  CC   test_summary (asan)"
+	@$(call cunit_link_summary,$(ASAN_FLAGS),asan)
+	@$(BUILD)/cunit-asan/test_summary
 
 test-cunit-parallel:
 	@mkdir -p $(BUILD)/cunit-asan
