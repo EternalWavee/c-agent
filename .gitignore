@@ -1,6 +1,9 @@
 # Build output
 build/
 
+# Tests
+tests/
+
 # Object files
 *.o
 *.d
@@ -27,3 +30,6 @@ Thumbs.db
 
 # handout
 handout*.md
+
+#session && offload
+.agent/

@@ -13,6 +13,9 @@ typedef struct {
   int llm_port;
   char workdir[PATH_MAX];
   int max_tokens;
+  int context_window;
+  float offload_threshold;
+  float summary_threshold;
 } AgentConfig;
 
 extern AgentConfig g_config;

@@ -252,6 +252,20 @@ int llm_chat(const MessageList *messages, const char *system_prompt,
   return 0;
 }
 
+void llm_response_free(LLMResponse *r) {
+  if (!r)
+    return;
+  free(r->content);
+  free(r->raw_message);
+  for (int i = 0; i < r->n_tool_calls; i++) {
+    free(r->tool_calls[i].id);
+    free(r->tool_calls[i].name);
+    cJSON_Delete(r->tool_calls[i].args);
+  }
+  free(r->tool_calls);
+  memset(r, 0, sizeof(*r));
+}
+
 int fetch_models(char *out, size_t out_cap, char *err, size_t err_cap) {
   char *header = xasprintf(
       "GET /api/v1/models HTTP/1.1\r\n"

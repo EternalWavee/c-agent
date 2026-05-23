@@ -9,6 +9,7 @@
 #include "agent.h"
 
 #include "config.h"
+#include "context/context.h"
 #include "llm_client.h"
 #include "message.h"
 #include "tools/tools.h"
@@ -30,7 +31,7 @@ static const char AGENT_SYSTEM_TEMPLATE[] =
 struct Agent {
   char *system_prompt;
   char *last_reply;
-  MessageList history;
+  Context *ctx;
 };
 
 Agent *agent_create(void) {
@@ -38,7 +39,9 @@ Agent *agent_create(void) {
   if (!a)
     return NULL;
   a->system_prompt = xasprintf(AGENT_SYSTEM_TEMPLATE, g_config.workdir);
-  msg_list_init(&a->history);
+  a->ctx = ctx_create(g_config.context_window);
+  ctx_add_policy(a->ctx, &offload_policy);
+  ctx_add_policy(a->ctx, &summary_policy);
   return a;
 }
 
@@ -47,118 +50,88 @@ void agent_free(Agent *a) {
     return;
   free(a->system_prompt);
   free(a->last_reply);
-  msg_list_free(&a->history);
+  ctx_free(a->ctx);
   free(a);
 }
 
 const char *agent_chat(Agent *a, const char *user_input) {
-  /*
-   * TODO(student, Part 1A):
-   *
-   * Drive one user turn:
-   *
-   *   1. Build a MessageList and push the user message.
-   *   2. Call llm_chat. On failure, print the error to stderr and
-   *      return NULL.
-   *   3. If the response carries no tool calls, cache its content on
-   *      `a` (so the returned pointer stays valid until the next call),
-   *      release everything else, and return it.
-   *   4. Otherwise, push the assistant message into history, execute
-   *      the tool the LLM asked for, push the result back as a tool
-   *      message (msg_tool_json in message.h), and call llm_chat again.
-   */
-  
-
-  // MessageList history;
-  // msg_list_init(&history);
-
   char *user_json = msg_user_json(user_input);
-  msg_list_push(&a->history,user_json);
-  
-  // free(user_json);
+  ctx_push(a->ctx, user_json);
+
+  char err[256];
+
+  /* 回收上下文预算 */
+  if (ctx_reclaim(a->ctx, err, sizeof(err)) < 0) {
+    fprintf(stderr, "context reclaim error: %s\n", err);
+    return NULL;
+  }
 
   LLMResponse resp;
-  memset(&resp,0,sizeof(resp));
-  char err[256];
+  memset(&resp, 0, sizeof(resp));
   ui_begin_thinking();
-  if(llm_chat(&a->history, a->system_prompt, g_config.model, &resp, err, sizeof(err))<0){
-    fprintf(stderr,"LLM error: %s\n", err);
-    msg_list_free(&a->history);
+  if (llm_chat((MessageList *)ctx_history(a->ctx), a->system_prompt,
+               g_config.model, &resp, err, sizeof(err)) < 0) {
+    fprintf(stderr, "LLM error: %s\n", err);
     return NULL;
   }
 
   int turns = 0;
-  while(resp.n_tool_calls>0){
+  while (resp.n_tool_calls > 0) {
     turns++;
-    if(turns>MAX_TURNS){
+    if (turns > MAX_TURNS) {
       a->last_reply = xstrdup("max turns exceeded");
-      free(resp.raw_message);
-      free(resp.content);
-      for(int i=0;i<resp.n_tool_calls;i++){
-        free(resp.tool_calls[i].id);
-        free(resp.tool_calls[i].name);
-        cJSON_Delete(resp.tool_calls[i].args);
-      }
-      free(resp.tool_calls);
-      msg_list_free(&a->history);
+      llm_response_free(&resp);
       return a->last_reply;
     }
 
-    msg_list_push(&a->history, resp.raw_message);
+    ctx_push(a->ctx, resp.raw_message);
     resp.raw_message = NULL;
 
     char *out_msgs[resp.n_tool_calls];
-    if(executor_run_tools(resp.tool_calls, resp.n_tool_calls, out_msgs, err, sizeof(err))<0){
+    if (executor_run_tools(resp.tool_calls, resp.n_tool_calls, out_msgs,
+                           err, sizeof(err)) < 0) {
       fprintf(stderr, "executor error: %s\n", err);
-      free(resp.content);
-      free(resp.raw_message);
-      for(int i=0;i<resp.n_tool_calls;i++){
-        free(resp.tool_calls[i].id);
-        free(resp.tool_calls[i].name);
-        cJSON_Delete(resp.tool_calls[i].args);
-      }
-      free(resp.tool_calls);
-      msg_list_free(&a->history);
+      llm_response_free(&resp);
       return NULL;
     }
-    for(int i=0;i<resp.n_tool_calls;i++){
-      msg_list_push(&a->history, out_msgs[i]);
-    }
-    free(resp.content);
-    free(resp.raw_message);                                                                                                                                                        
-    for (int i = 0; i < resp.n_tool_calls; i++) {
-        free(resp.tool_calls[i].id);
-        free(resp.tool_calls[i].name);
-        cJSON_Delete(resp.tool_calls[i].args);                                                                                                                                     
-    }
-    free(resp.tool_calls);                                                                                                                                                         
+    for (int i = 0; i < resp.n_tool_calls; i++)
+      ctx_push(a->ctx, out_msgs[i]);
+
+    llm_response_free(&resp);
     memset(&resp, 0, sizeof(resp));
 
-    ui_begin_thinking();
-    if(llm_chat(&a->history, a->system_prompt, g_config.model,
-                   &resp, err, sizeof(err)) < 0) {                                                                                                                                   
-      fprintf(stderr, "llm_chat failed: %s\n", err);
-      msg_list_free(&a->history);                                                                                                                                                   
-      return NULL;                                                                                                                                                               
+    /* 再次回收上下文预算 */
+    if (ctx_reclaim(a->ctx, err, sizeof(err)) < 0) {
+      fprintf(stderr, "context reclaim error: %s\n", err);
+      return NULL;
     }
 
+    ui_begin_thinking();
+    if (llm_chat((MessageList *)ctx_history(a->ctx), a->system_prompt,
+                 g_config.model, &resp, err, sizeof(err)) < 0) {
+      fprintf(stderr, "llm_chat failed: %s\n", err);
+      return NULL;
+    }
   }
+
   free(a->last_reply);
   a->last_reply = resp.content ? resp.content : xstrdup("");
   if (resp.raw_message)
-    msg_list_push(&a->history, resp.raw_message);
+    ctx_push(a->ctx, resp.raw_message);
   free(resp.tool_calls);
 
   return a->last_reply;
 }
 
 MessageList *agent_get_history(Agent *a) {
-  return &a->history;
+  return (MessageList *)ctx_history(a->ctx);
 }
 
 void agent_clear_history(Agent *a) {
-  msg_list_free(&a->history);
-  msg_list_init(&a->history);
+  ctx_free(a->ctx);
+  a->ctx = ctx_create(g_config.context_window);
+  ctx_add_policy(a->ctx, &offload_policy);
+  ctx_add_policy(a->ctx, &summary_policy);
   free(a->last_reply);
   a->last_reply = NULL;
 }

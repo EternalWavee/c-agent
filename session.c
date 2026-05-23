@@ -12,25 +12,19 @@
 #include <sys/stat.h>
 #include <time.h>
 
-#define SESSION_DIR ".c-agent/sessions"
 #define MAX_SESSIONS 256
 
 static void session_dir_path(char *buf, size_t cap) {
-  const char *home = getenv("HOME");
-  if (!home)
-    home = "/tmp";
-  snprintf(buf, cap, "%s/%s", home, SESSION_DIR);
+  snprintf(buf, cap, "%s/.agent/sessions", g_config.workdir);
 }
 
 static int ensure_session_dir(void) {
-  char dir[512];
-  session_dir_path(dir, sizeof(dir));
-
-  /* mkdir -p: create .c-agent first, then sessions */
-  char parent[512];
-  const char *home = getenv("HOME");
-  snprintf(parent, sizeof(parent), "%s/.c-agent", home ? home : "/tmp");
+  char parent[PATH_MAX];
+  snprintf(parent, sizeof(parent), "%s/.agent", g_config.workdir);
   mkdir(parent, 0755);
+
+  char dir[PATH_MAX];
+  session_dir_path(dir, sizeof(dir));
   if (mkdir(dir, 0755) != 0 && errno != EEXIST)
     return -1;
   return 0;

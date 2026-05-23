@@ -56,4 +56,6 @@ int llm_chat(const MessageList *messages, const char *system_prompt,
  */
 int fetch_models(char *out, size_t out_cap, char *err, size_t err_cap);
 
+void llm_response_free(LLMResponse *r);
+
 #endif
