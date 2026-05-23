@@ -93,20 +93,29 @@ static void render_model_menu(char **models, int count, int selected,
   fflush(stdout);
 }
 
-static int interactive_model_select(void) {
-  char buf[4096];
-  char err[256];
-  if (fetch_models(buf, sizeof(buf), err, sizeof(err)) < 0) {
-    fprintf(stderr, "Failed to fetch models: %s\n", err);
-    return -1;
-  }
+typedef struct {
+  const char *name;
+  int context_window;
+} ModelEntry;
 
+static const ModelEntry BUILTIN_MODELS[] = {
+    {"deepseek-chat",      32000},
+    {"deepseek-v3.2",      32000},
+    {"deepseek-reasoner",  32000},
+    {"minimax",            192000},
+    {"minimax-m2.7",       192000},
+    {"glm",                128000},
+    {"glm-5.1",            128000},
+    {"qwen",               256000},
+    {"qwen3.5-27b",        256000},
+    {"qwen3coder",         32000},
+};
+
+static int interactive_model_select(void) {
   char *models[MAX_MODELS];
-  int count = parse_model_list(buf, models, MAX_MODELS);
-  if (count == 0) {
-    fprintf(stderr, "No models available\n");
-    return -1;
-  }
+  int count = 0;
+  for (int i = 0; i < (int)(sizeof(BUILTIN_MODELS) / sizeof(BUILTIN_MODELS[0])); i++)
+    models[count++] = (char *)BUILTIN_MODELS[i].name;
 
   int selected = find_current_model(models, count);
   if (selected < 0)
@@ -141,6 +150,7 @@ static int interactive_model_select(void) {
       render_model_menu(models, count, selected, 1);
     } else if (c == '\r' || c == '\n') {
       snprintf(g_config.model, sizeof(g_config.model), "%s", models[selected]);
+      g_config.context_window = BUILTIN_MODELS[selected].context_window;
       result = 0;
       break;
     } else if (c == 'q' || c == 'Q') {
@@ -156,11 +166,11 @@ static int interactive_model_select(void) {
   printf("\033[%dA", count + 1);
 
   if (result == 0)
-    printf("Switched model to: %s\n", g_config.model);
+    printf("Switched model to: %s (context: %d tokens)\n",
+           g_config.model, g_config.context_window);
   else
     printf("Cancelled.\n");
 
-  free_model_list(models, count);
   return result;
 }
 

@@ -32,6 +32,11 @@ static int summary_apply(Context *ctx, char *err, size_t err_cap) {
         const char *role = json_str(msg, "role");
         const char *content = json_str(msg, "content");
         if (role && content) {
+            size_t need = strlen(role) + strlen(content) + 4;
+            while (buf_len + need > buf_cap) {
+                buf_cap *= 2;
+                buf = xrealloc(buf, buf_cap);
+            }
             int n = snprintf(buf + buf_len, buf_cap - buf_len,
                              "%s: %s\n", role, content);
             if (n > 0) buf_len += (size_t)n;
@@ -48,8 +53,10 @@ static int summary_apply(Context *ctx, char *err, size_t err_cap) {
     LLMResponse resp;
     memset(&resp, 0, sizeof(resp));
     const char *system = "You are a conversation summarizer. "
-        "Summarize the following conversation into a concise handoff message, "
-        "preserving key facts, decisions, and outcomes.";
+        "Summarize the following conversation into a concise handoff message. "
+        "Preserve: key facts, decisions, outcomes, user identity and preferences, "
+        "project context, and any unresolved tasks. "
+        "Write as if the next assistant will read this and continue the conversation seamlessly.";
 
     int rc = llm_chat(&prefix, system, g_config.model, &resp, err, err_cap);
     msg_list_free(&prefix);
