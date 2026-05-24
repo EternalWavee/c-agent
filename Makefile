@@ -22,7 +22,7 @@ CFLAGS  := -D_XOPEN_SOURCE=700 -std=c11 -Wall -Wextra -pedantic \
            -Wno-format-truncation -g -MMD -MP -I. -Ilibs $(EXTRA_CFLAGS)
 # 静音warning snprintf 拼接 workdir + "/" + rel_path 时，编译器理论上算出两个字符串加起来可能超过4096字节会截断。但实际使用中路径根本不会那么长，snprintf 截断也是安全行为
 # 还是不修改TA的sandbox比较好的
-LDLIBS  := -lpthread
+LDLIBS  := -lpthread -lm
 
 ASAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer
@@ -34,7 +34,7 @@ TOOL_SRCS  := $(sort $(wildcard tools/*.c))
 UI_SRCS    := $(sort $(wildcard ui/*.c))
 CTX_SRCS   := $(sort $(wildcard context/*.c))
 
-CORE_SRCS  := main.c cmd.c session.c config.c message.c util.c http.c \
+CORE_SRCS  := main.c cmd.c session.c memory.c config.c message.c util.c http.c \
               $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS) $(CTX_SRCS)
 
 SRCS := $(CORE_SRCS) $(EXTRA_SRCS)

@@ -26,7 +26,13 @@
 static const char AGENT_SYSTEM_TEMPLATE[] =
     "You are a coding agent running in the CLI at %s.\n"
     "Use the provided tools when you need to run shell commands.\n"
-    "Return a short, final text reply when the task is done.";
+    "Return a short, final text reply when the task is done.\n\n"
+    "Memory:\n"
+    "- Use the recall tool at the start of a task to check what you already know about this project.\n"
+    "- Use the remember tool to store important findings: architecture decisions, build commands,\n"
+    "  key file locations, coding conventions, user preferences, or anything worth knowing later.\n"
+    "- Good memory entries are specific and concise. Example: 'Project uses cJSON for JSON parsing, source in libs/cJSON.c'\n"
+    "- Memory persists across sessions. What you remember now will help you in future conversations.";
 
 struct Agent {
   char *system_prompt;

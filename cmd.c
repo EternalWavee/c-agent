@@ -272,6 +272,23 @@ static void cmd_session(const char *args, Agent *a) {
   }
 }
 
+static void cmd_memory(const char *args, Agent *a) {
+  if (args[0] != '\0') {
+    fprintf(stderr, "Usage: /memory — summarize and save what you learned\n");
+    return;
+  }
+  /* Ask the LLM to summarize what it learned and save to memory */
+  const char *prompt =
+      "Look at our conversation so far. Use the remember tool to save "
+      "anything important you learned about this project — architecture, "
+      "conventions, key files, build commands, user preferences, decisions. "
+      "Be specific and concise. Call remember once for each distinct piece of knowledge. "
+      "If nothing noteworthy, say 'Nothing to remember yet.'";
+  const char *reply = agent_chat(a, prompt);
+  if (reply)
+    printf("%s\n", reply);
+}
+
 static void cmd_help(void) {
   printf("Commands:\n");
   printf("  /model            Interactive model picker\n");
@@ -280,6 +297,7 @@ static void cmd_help(void) {
   printf("  /session name X   Rename current session\n");
   printf("  /session delete X Delete a session\n");
   printf("  /session restore X Restore a session by id\n");
+  printf("  /memory           Show project memory\n");
   printf("  /help             Show this help\n");
   printf("  exit/quit/q       Exit\n");
 }
@@ -296,6 +314,10 @@ int cmd_dispatch(const char *input, Agent *a) {
     const char *args = input + 8;
     while (*args == ' ') args++;
     cmd_session(args, a);
+  } else if (strncmp(input, "/memory", 7) == 0) {
+    const char *args = input + 7;
+    while (*args == ' ') args++;
+    cmd_memory(args, a);
   } else if (strcmp(input, "/help") == 0) {
     cmd_help();
   } else {

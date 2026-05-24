@@ -25,6 +25,7 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 - **Parallel execution** — read-only tools dispatched concurrently via pthreads
 - **Context management** — automatic offload (large outputs to disk) and summary (LLM-based compression)
 - **Session persistence** — append-only log + checkpoint architecture with crash recovery, auto-naming, and interactive session management
+- **Project memory** — LLM-driven persistent knowledge store (`.agent/memory.md`), the agent learns and remembers across sessions
 - **Sandbox safety** — all file paths confined to the workspace directory
 - **Dangerous command filter** — blocks destructive shell patterns before execution
 - **Terminal UI** — real-time spinner and per-tool status display
@@ -101,6 +102,7 @@ Type 'exit' to quit.
 | `/session name X` | Rename current session |
 | `/session delete X` | Delete a session |
 | `/session restore X` | Restore a session by id |
+| `/memory` | Trigger LLM to summarize and save what it learned |
 | `/help` | Show available commands |
 | `exit` / `quit` / `q` | Exit |
 
@@ -114,6 +116,8 @@ Type 'exit' to quit.
 | `read_file` | Read file contents | Yes |
 | `write_file` | Write contents to a file | No |
 | `edit_file` | Replace first occurrence of text in a file | No |
+| `remember` | Store knowledge into persistent project memory | No |
+| `recall` | Read project memory from previous sessions | Yes |
 
 Read-only tools are automatically dispatched in parallel. State-changing tools run serially.
 
@@ -150,6 +154,38 @@ Each session is stored as a directory under `.agent/sessions/<id>/`:
 
 ---
 
+## Memory System
+
+The agent maintains a persistent memory file at `.agent/memory.md` that stores knowledge across sessions.
+
+**How it works:**
+
+1. The LLM uses the `remember` tool to save important findings during conversation
+2. The LLM uses the `recall` tool (or `read_file`) to read past knowledge when needed
+3. The `/memory` command triggers the LLM to review the conversation and save what it learned
+4. The system prompt guides the LLM to actively use memory — it learns what's worth remembering over time
+
+**Memory format** (human-readable markdown):
+
+```markdown
+# Project Memory
+- **[architecture]** 2026-05-24 14:30: Uses WAL pattern — checkpoint.json + log.jsonl
+- **[build]** 2026-05-24 14:31: Run `make` to build, binary at build/c-agent
+- **[convention]** 2026-05-24 14:32: File tools must call resolve_workspace_path before opening
+```
+
+**Write paths:**
+- LLM actively calls `remember` tool (primary)
+- `/memory` command triggers LLM summarization
+- User manually edits `.agent/memory.md`
+
+**Read paths:**
+- LLM calls `recall` tool
+- LLM calls `read_file` on `.agent/memory.md`
+- `/memory` command (triggers read + summarize + write cycle)
+
+---
+
 ## Testing
 
 ```bash
@@ -167,6 +203,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 .
 ├── main.c                  # Entry point and REPL
 ├── session.c               # Session persistence (log + checkpoint)
+├── memory.c                # Project memory (.agent/memory.md)
 ├── cmd.c                   # Slash command dispatch
 ├── config.c                # Environment-based configuration
 ├── agent/
@@ -183,7 +220,8 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 │   ├── bash.c              # Shell command execution
 │   ├── read.c              # File reader
 │   ├── write.c             # File writer
-│   └── edit.c              # Substring replacement
+│   ├── edit.c              # Substring replacement
+│   └── memory_tool.c       # remember + recall tools
 ├── ui/
 │   ├── ui.c                # Event dispatch
 │   └── render.c            # Terminal rendering thread
@@ -207,13 +245,14 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - [x] Context offload (large outputs to disk)
 - [x] Context summary (LLM-based history compression)
 - [x] Session persistence (append-only log + checkpoint, crash recovery, auto-naming)
+- [x] Project memory (LLM-driven persistent knowledge store in .agent/memory.md)
 - [x] Terminal UI with spinner and per-tool status
 
 ### Planned
 
 - [ ] **Evaluation harness** — end-to-end benchmark scenarios with metrics
 - [ ] **SubAgent** — spawn child agents for independent subtasks
-- [ ] **Memory** — project-level knowledge persistence across sessions
+- [x] **Memory** — project-level knowledge persistence across sessions
 - [ ] **Skill system** — on-demand prompt injection for specialized tasks
 
 ---

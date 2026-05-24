@@ -2,6 +2,7 @@
 #include "tools/tools.h"
 #include "cmd.h"
 #include "config.h"
+#include "memory.h"
 #include "session.h"
 #include "ui/ui.h"
 
@@ -14,7 +15,7 @@
 
 int main(void) {
   config_init();
-
+  memory_init();
   tools_init();
   Agent *a = agent_create();
   if (!a) {
@@ -67,6 +68,7 @@ int main(void) {
   ui_stop();
   if (isatty(STDIN_FILENO))
     session_shutdown(a);
+  memory_shutdown();
   agent_free(a);
   return 0;
 }
