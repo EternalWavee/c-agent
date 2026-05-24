@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "libs/cJSON.h"
+#include "memory.h"
 #include "util.h"
 
 #include <dirent.h>
@@ -593,8 +594,26 @@ int session_restore(const char *session_id, Agent *a) {
 }
 
 void session_shutdown(Agent *a) {
-    if (current_session_id[0] != '\0' && agent_history_count(a) > 0)
-        session_checkpoint(a);
+    if (current_session_id[0] != '\0') {
+        if (agent_history_count(a) > 0) {
+            session_checkpoint(a);
+        } else {
+            /* No messages — remove empty session directory */
+            char dir[PATH_MAX];
+            session_dir(dir, sizeof(dir), current_session_id);
+            char path[PATH_MAX];
+            snprintf(path, sizeof(path), "%s/meta.json", dir);    remove(path);
+            snprintf(path, sizeof(path), "%s/checkpoint.json", dir); remove(path);
+            snprintf(path, sizeof(path), "%s/log.jsonl", dir);    remove(path);
+            rmdir(dir);
+        }
+    }
+
+    /* Consolidate short-term observations into long-term memory */
+    char err[256];
+    if (memory_consolidate(err, sizeof(err)) < 0)
+        fprintf(stderr, "[memory] consolidate failed: %s\n", err);
+
     current_session_id[0] = '\0';
 }
 

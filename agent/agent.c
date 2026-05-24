@@ -11,6 +11,7 @@
 #include "config.h"
 #include "context/context.h"
 #include "llm_client.h"
+#include "memory.h"
 #include "message.h"
 #include "tools/tools.h"
 #include "tools/executor.h"
@@ -44,7 +45,16 @@ Agent *agent_create(void) {
   Agent *a = calloc(1, sizeof(*a));
   if (!a)
     return NULL;
-  a->system_prompt = xasprintf(AGENT_SYSTEM_TEMPLATE, g_config.workdir);
+
+  char *base_prompt = xasprintf(AGENT_SYSTEM_TEMPLATE, g_config.workdir);
+  char *mem_text = memory_build_prompt();
+  if (mem_text && mem_text[0])
+    a->system_prompt = xasprintf("%s\n\n## Project Memory\n%s", base_prompt, mem_text);
+  else
+    a->system_prompt = xstrdup(base_prompt);
+  free(base_prompt);
+  free(mem_text);
+
   a->ctx = ctx_create(g_config.context_window);
   ctx_add_policy(a->ctx, &offload_policy);
   ctx_add_policy(a->ctx, &summary_policy);
@@ -100,6 +110,15 @@ const char *agent_chat(Agent *a, const char *user_input) {
       llm_response_free(&resp);
       return NULL;
     }
+
+    /* Auto-capture observations for memory */
+    for (int i = 0; i < resp.n_tool_calls; i++) {
+      char *args_str = cJSON_PrintUnformatted(resp.tool_calls[i].args);
+      memory_observe(resp.tool_calls[i].name, args_str,
+                     out_msgs[i] ? out_msgs[i] : "");
+      free(args_str);
+    }
+
     for (int i = 0; i < resp.n_tool_calls; i++)
       ctx_push(a->ctx, out_msgs[i]);
 
