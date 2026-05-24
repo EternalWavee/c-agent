@@ -27,7 +27,6 @@
 static const char AGENT_SYSTEM_TEMPLATE[] =
     "You are a coding agent running in the CLI at %s.\n"
     "Use the provided tools when you need to run shell commands.\n"
-    "Always reply with a short text message after using any tool — never stay silent.\n"
     "Return a short, final text reply when the task is done.\n\n"
     "Memory:\n"
     "- Use the recall tool at the start of a task to check what you already know about this project.\n"
