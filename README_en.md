@@ -9,7 +9,7 @@
 
 <p align="center">
   A lightweight, terminal-based coding agent written in pure C.<br/>
-  <a href="README_zh.md">中文文档</a>
+  <a href="README.md">中文文档</a>
 </p>
 
 C Agent is a terminal-based coding assistant powered by LLM tool-calling. Users describe tasks in natural language, and the agent autonomously invokes tools — running shell commands, reading and writing files, editing code — to complete them. Built with a ReAct reasoning loop, parallel read-only execution, automatic context management (offload + summary), and workspace sandbox isolation.

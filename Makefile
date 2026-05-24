@@ -29,13 +29,17 @@ TSAN_FLAGS := -fsanitize=thread -fno-omit-frame-pointer
 
 # Source partitioning ---------------------------------------------------------
 
-AGENT_SRCS := $(sort $(wildcard agent/*.c))
-TOOL_SRCS  := $(sort $(wildcard tools/*.c))
-UI_SRCS    := $(sort $(wildcard ui/*.c))
-CTX_SRCS   := $(sort $(wildcard context/*.c))
+AGENT_SRCS   := $(sort $(wildcard agent/*.c))
+TOOL_SRCS    := $(sort $(wildcard tools/*.c))
+UI_SRCS      := $(sort $(wildcard ui/*.c))
+CTX_SRCS     := $(sort $(wildcard context/*.c))
+SESSION_SRCS := $(sort $(wildcard session/*.c))
+MEMORY_SRCS  := $(sort $(wildcard memory/*.c))
+CORE_SUB     := $(sort $(wildcard core/*.c))
 
-CORE_SRCS  := main.c cmd.c session.c memory.c config.c message.c util.c http.c \
-              $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS) $(CTX_SRCS)
+CORE_SRCS  := main.c \
+              $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS) $(CTX_SRCS) \
+              $(SESSION_SRCS) $(MEMORY_SRCS) $(CORE_SUB)
 
 SRCS := $(CORE_SRCS) $(EXTRA_SRCS)
 
@@ -109,7 +113,7 @@ test-agent-tsan: tsan
 
 # ── Pure-C unit tests ───────────────────────────────────────────────────
 
-CUNIT_CORE  := config.c message.c util.c
+CUNIT_CORE  := core/config.c core/message.c core/util.c
 CUNIT_TOOLS := tools/registry.c tools/sandbox.c \
                tools/bash.c tools/read.c tools/write.c tools/edit.c
 CUNIT_CTX_BASE := context/context.c context/token.c

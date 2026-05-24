@@ -1,8 +1,8 @@
 #include "context/context.h"
 #include "context/internal.h"
-#include "config.h"
+#include "core/config.h"
 #include "cJSON.h"
-#include "util.h"
+#include "core/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

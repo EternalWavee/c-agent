@@ -2,8 +2,8 @@
 #define LLM_CLIENT_H
 
 #include "cJSON.h"
-#include "config.h"
-#include "message.h"
+#include "core/config.h"
+#include "core/message.h"
 
 #include <stddef.h>
 

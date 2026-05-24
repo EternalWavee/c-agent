@@ -8,14 +8,14 @@
  */
 #include "agent.h"
 
-#include "config.h"
+#include "core/config.h"
 #include "context/context.h"
 #include "llm_client.h"
-#include "memory.h"
-#include "message.h"
+#include "memory/memory.h"
+#include "core/message.h"
 #include "tools/tools.h"
 #include "tools/executor.h"
-#include "util.h"
+#include "core/util.h"
 #include "ui/ui.h"
 
 #include <stdio.h>

@@ -1,8 +1,8 @@
 /* Terminal UI: static text helpers and event-dispatch to the render thread. */
 #include "ui/internal.h"
 
-#include "config.h"
-#include "util.h"
+#include "core/config.h"
+#include "core/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

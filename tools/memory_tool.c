@@ -5,8 +5,8 @@
  * recall:   read .agent/memory.md and return its content
  */
 #include "tools/tools.h"
-#include "memory.h"
-#include "util.h"
+#include "memory/memory.h"
+#include "core/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,9 +1,9 @@
-#include "session.h"
+#include "session/session.h"
 
-#include "config.h"
+#include "core/config.h"
 #include "libs/cJSON.h"
-#include "memory.h"
-#include "util.h"
+#include "memory/memory.h"
+#include "core/util.h"
 
 #include <dirent.h>
 #include <errno.h>

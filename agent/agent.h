@@ -1,7 +1,7 @@
 #ifndef AGENT_H
 #define AGENT_H
 
-#include "message.h"
+#include "core/message.h"
 
 typedef struct Agent Agent;
 

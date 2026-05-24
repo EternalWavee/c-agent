@@ -1,7 +1,7 @@
 #ifndef CONTEXT_H
 #define CONTEXT_H
 
-#include "message.h"
+#include "core/message.h"
 
 #include <stdbool.h>
 #include <stddef.h>

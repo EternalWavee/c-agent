@@ -8,7 +8,7 @@
  * must turn that into a ToolResult the agent can send back.
  */
 #include "tools.h"
-#include "util.h"
+#include "core/util.h"
 
 #include <errno.h>
 #include <stdio.h>

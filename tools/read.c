@@ -6,8 +6,8 @@
  */
 #include "tools/tools.h"
 #include "tools/sandbox.h"
-#include "config.h"
-#include "util.h"
+#include "core/config.h"
+#include "core/util.h"
 
 #include <errno.h>
 #include <stdio.h>

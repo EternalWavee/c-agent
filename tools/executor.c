@@ -27,10 +27,10 @@
  */
 #include "tools/executor.h"
 
-#include "message.h"
+#include "core/message.h"
 #include "tools/tools.h"
 #include "ui/ui.h"
-#include "util.h"
+#include "core/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,9 +1,9 @@
-#include "memory.h"
+#include "memory/memory.h"
 
 #include "agent/llm_client.h"
-#include "config.h"
-#include "message.h"
-#include "util.h"
+#include "core/config.h"
+#include "core/message.h"
+#include "core/util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,9 +1,9 @@
 #include "context/context.h"
 #include "context/internal.h"
-#include "config.h"
+#include "core/config.h"
 #include "agent/llm_client.h"
-#include "message.h"
-#include "util.h"
+#include "core/message.h"
+#include "core/util.h"
 #include "cJSON.h"
 
 #include <stdio.h>
