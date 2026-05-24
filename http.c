@@ -1,6 +1,6 @@
-#include "core/http.h"
+#include "http.h"
 
-#include "core/util.h"
+#include "util.h"
 
 #include <errno.h>
 #include <netdb.h>

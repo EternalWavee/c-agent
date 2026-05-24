@@ -1,9 +1,9 @@
 #include "agent/agent.h"
 #include "tools/tools.h"
-#include "agent/cmd.h"
-#include "core/config.h"
-#include "memory/memory.h"
-#include "session/session.h"
+#include "cmd.h"
+#include "config.h"
+#include "memory.h"
+#include "session.h"
 #include "ui/ui.h"
 
 #include <stdio.h>

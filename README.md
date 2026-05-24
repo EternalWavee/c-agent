@@ -9,7 +9,7 @@
 
 <p align="center">
   一个轻量级的、基于终端的编程智能体，纯 C 实现。<br/>
-  <a href="README_en.md">English</a>
+  <a href="README.md">English</a>
 </p>
 
 C Agent 是一个基于 LLM 工具调用的终端编程助手。用户用自然语言描述任务，Agent 自动调用工具（执行 shell 命令、读写文件、编辑代码）来完成。核心特性包括 ReAct 多轮推理、只读工具并发执行、上下文自动管理（卸载 + 摘要）、工作区沙箱隔离。本项目为上海交通大学 CS2313 操作系统课程设计。

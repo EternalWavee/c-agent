@@ -1,9 +1,9 @@
-#include "agent/cmd.h"
+#include "cmd.h"
 
 #include "agent/agent.h"
 #include "agent/llm_client.h"
-#include "core/config.h"
-#include "session/session.h"
+#include "config.h"
+#include "session.h"
 
 #include <stdio.h>
 #include <stdlib.h>

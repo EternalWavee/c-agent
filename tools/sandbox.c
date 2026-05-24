@@ -26,8 +26,8 @@
  */
 #include "tools/sandbox.h"
 
-#include "core/config.h"
-#include "core/util.h"
+#include "config.h"
+#include "util.h"
 
 #include <limits.h>
 #include <stdbool.h>

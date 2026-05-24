@@ -1,7 +1,7 @@
-#include "core/message.h"
+#include "message.h"
 
 #include "cJSON.h"
-#include "core/util.h"
+#include "util.h"
 
 #include <stdlib.h>
 #include <string.h>

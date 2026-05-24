@@ -7,10 +7,10 @@
  */
 #include "llm_client.h"
 
-#include "core/config.h"
-#include "core/http.h"
+#include "config.h"
+#include "http.h"
 #include "tools/tools.h"
-#include "core/util.h"
+#include "util.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,4 +1,4 @@
-#include "core/util.h"
+#include "util.h"
 
 #include <stdarg.h>
 #include <stdio.h>
