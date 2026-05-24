@@ -243,6 +243,12 @@ int memory_consolidate(char *err, size_t err_cap) {
     }
     free(obs_text);
 
+    if (!new_memories || !new_memories[0]) {
+        fprintf(stderr, "[memory] extraction returned empty, skipping merge\n");
+        obs_clear();
+        return 0;
+    }
+
     fprintf(stderr, "[memory] extracted:\n%s\n", new_memories);
 
     /* Step 2: new memories + existing memory.md → merged */
@@ -264,6 +270,13 @@ int memory_consolidate(char *err, size_t err_cap) {
         return -1;
     }
     free(merge_input);
+
+    /* Guard: don't overwrite memory.md with empty content */
+    if (!merged || !merged[0]) {
+        fprintf(stderr, "[memory] merge returned empty, keeping existing memory.md\n");
+        free(merged);
+        return 0;
+    }
 
     /* Write merged result to memory.md */
     char path[PATH_MAX];
