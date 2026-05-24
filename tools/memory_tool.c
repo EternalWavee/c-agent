@@ -12,21 +12,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+static MemoryType parse_type(const char *str) {
+    if (!str) return MEM_FACT;
+    if (strcmp(str, "pattern") == 0) return MEM_PATTERN;
+    if (strcmp(str, "preference") == 0) return MEM_PREFERENCE;
+    if (strcmp(str, "architecture") == 0) return MEM_ARCHITECTURE;
+    if (strcmp(str, "bug") == 0) return MEM_BUG;
+    if (strcmp(str, "workflow") == 0) return MEM_WORKFLOW;
+    if (strcmp(str, "fact") == 0) return MEM_FACT;
+    return MEM_FACT;
+}
+
 static ToolResult tool_remember(cJSON *args) {
     const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(args, "content"));
     if (!content || !content[0])
         return (ToolResult){.ok = false,
                             .output = xstrdup("missing 'content' argument")};
 
-    const char *category = cJSON_GetStringValue(cJSON_GetObjectItem(args, "category"));
+    const char *type_str = cJSON_GetStringValue(cJSON_GetObjectItem(args, "type"));
+    MemoryType type = parse_type(type_str);
 
-    if (memory_remember(content, category) < 0)
+    if (memory_remember(content, type) < 0)
         return (ToolResult){.ok = false,
                             .output = xstrdup("failed to write to memory file")};
 
     return (ToolResult){
         .ok = true,
-        .output = xasprintf("Remembered: %.200s", content),
+        .output = xasprintf("Remembered [%s]: %.200s", memory_type_str(type), content),
     };
 }
 
@@ -55,9 +67,9 @@ ToolDef remember_tool_def = {
         "\"properties\":{"
         "\"content\":{\"type\":\"string\","
         "\"description\":\"The knowledge to remember — be specific and concise\"},"
-        "\"category\":{\"type\":\"string\","
-        "\"description\":\"Category tag: architecture, convention, preference, "
-        "decision, build, workflow, bug, fact\"}"
+        "\"type\":{\"type\":\"string\","
+        "\"description\":\"Memory type\","
+        "\"enum\":[\"pattern\",\"preference\",\"architecture\",\"bug\",\"workflow\",\"fact\"]}"
         "},\"required\":[\"content\"]}",
     .exec = tool_remember,
     .read_only = false,
