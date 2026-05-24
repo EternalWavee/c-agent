@@ -135,3 +135,19 @@ void agent_clear_history(Agent *a) {
   free(a->last_reply);
   a->last_reply = NULL;
 }
+
+int agent_history_count(Agent *a) {
+  const MessageList *hist = ctx_history(a->ctx);
+  return hist->len;
+}
+
+const char *agent_get_message(Agent *a, int index) {
+  const MessageList *hist = ctx_history(a->ctx);
+  if (index < 0 || index >= hist->len)
+    return NULL;
+  return hist->items[index];
+}
+
+void agent_push_message(Agent *a, char *json) {
+  ctx_push(a->ctx, json);
+}

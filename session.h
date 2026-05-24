@@ -2,38 +2,50 @@
 #define SESSION_H
 
 #include "agent/agent.h"
-#include "message.h"
 
-/*
- * Save the current conversation to ~/.c-agent/sessions/<timestamp>.json.
- * Returns 0 on success, -1 on error.
- */
-int session_save(const char *model, const MessageList *history);
+#define SESSION_ID_LEN    20
+#define SESSION_NAME_MAX  128
+#define SESSION_MODEL_MAX 128
+#define SESSION_TAGS_MAX  16
+#define SESSION_TAG_LEN   64
 
-/*
- * Load a session file into the agent, replacing current history.
- * Returns 0 on success, -1 on error.
- */
-int session_load(const char *path, Agent *a);
+typedef struct {
+    char id[SESSION_ID_LEN];
+    char name[SESSION_NAME_MAX];
+    char model[SESSION_MODEL_MAX];
+    char created[32];
+    char updated[32];
+    int  message_count;
+    char tags[SESSION_TAGS_MAX][SESSION_TAG_LEN];
+    int  tag_count;
+} SessionMeta;
 
-/*
- * List all saved sessions. Each entry has a path and a preview
- * (last user message). Sorted by filename descending (newest first).
- * Caller must free with session_list_free().
- */
-int session_list(char ***out_paths, char ***out_previews, int *out_count);
-void session_list_free(char **paths, char **previews, int count);
+typedef struct {
+    char session_id[SESSION_ID_LEN];
+    char name[SESSION_NAME_MAX];
+    char model[SESSION_MODEL_MAX];
+    char created[32];
+    char updated[32];
+    int  message_count;
+    char preview[256];
+} SessionEntry;
 
-/*
- * Set the current session path, so subsequent saves overwrite this file
- * instead of creating a new one. Used when restoring a session.
- */
-void session_set_current(const char *path);
+/* Lifecycle */
+int  session_startup_recovery(Agent *a);
+int  session_new(Agent *a);
+int  session_append(Agent *a, int from);
+int  session_checkpoint(Agent *a);
+int  session_restore(const char *session_id, Agent *a);
+void session_shutdown(Agent *a);
 
-/*
- * Delete the current session file if it differs from `keep`.
- * Used to remove the incomplete session after merging into a restored one.
- */
-void session_delete_other(const char *keep);
+/* Metadata */
+int  session_rename(const char *new_name);
+int  session_add_tag(const char *tag);
+int  session_delete(const char *session_id);
+
+/* Listing */
+int  session_list(SessionEntry **out);
+void session_list_free(SessionEntry *list, int count);
+const char *session_current_id(void);
 
 #endif

@@ -33,3 +33,7 @@ handout*.md
 
 #session && offload
 .agent/
+
+#codegraph && code agent
+.codegraph/
+.claude/
