@@ -45,25 +45,6 @@ static int enable_raw_mode(void) {
 
 /* --- Model list helpers --- */
 
-static int parse_model_list(const char *buf, char **models, int max) {
-  int count = 0;
-  const char *p = buf;
-  while (*p && count < max) {
-    const char *nl = strchr(p, '\n');
-    size_t len = nl ? (size_t)(nl - p) : strlen(p);
-    if (len > 0) {
-      models[count] = malloc(len + 1);
-      memcpy(models[count], p, len);
-      models[count][len] = '\0';
-      count++;
-    }
-    if (!nl)
-      break;
-    p = nl + 1;
-  }
-  return count;
-}
-
 static void free_model_list(char **models, int count) {
   for (int i = 0; i < count; i++)
     free(models[i]);
@@ -176,11 +157,12 @@ static int interactive_model_select(void) {
 
 /* --- Interactive session selector --- */
 
-static void render_session_menu(char **previews, int count, int selected) {
+static void render_session_menu(SessionEntry *entries, int count, int selected) {
   for (int i = 0; i < count; i++) {
     if (i == selected)
       printf("\033[7m");
-    printf("  %s  \033[0m\n", previews[i][0] ? previews[i] : "(empty)");
+    const char *label = entries[i].name[0] ? entries[i].name : entries[i].session_id;
+    printf("  %s  \033[0m\n", label);
   }
   printf("\033[90m  \xE2\x86\x91\xE2\x86\x93 move  Enter restore  "
          "Esc cancel\033[0m\n");
@@ -188,23 +170,23 @@ static void render_session_menu(char **previews, int count, int selected) {
   fflush(stdout);
 }
 
-static int interactive_session_select(Agent *a) {
-  char **paths, **previews;
-  int count;
-  if (session_list(&paths, &previews, &count) < 0 || count == 0) {
+static void interactive_session_select(Agent *a) {
+  SessionEntry *entries;
+  int count = session_list(&entries);
+  if (count <= 0) {
     fprintf(stderr, "No saved sessions\n");
-    return -1;
+    return;
   }
 
   int selected = 0;
 
   if (enable_raw_mode() < 0) {
     fprintf(stderr, "Failed to enable raw terminal mode\n");
-    session_list_free(paths, previews, count);
-    return -1;
+    session_list_free(entries, count);
+    return;
   }
 
-  render_session_menu(previews, count, selected);
+  render_session_menu(entries, count, selected);
 
   int result = -1;
   while (1) {
@@ -224,33 +206,10 @@ static int interactive_session_select(Agent *a) {
         else if (seq[1] == 'B' && selected < count - 1)
           selected++;
       }
-      render_session_menu(previews, count, selected);
+      render_session_menu(entries, count, selected);
     } else if (c == '\r' || c == '\n') {
-      /* save current history before loading */
-      MessageList *cur = agent_get_history(a);
-      int cur_len = cur->len;
-      char **cur_items = cur->items;
-      cur->items = NULL;
-      cur->len = 0;
-      cur->cap = 0;
-
-      if (session_load(paths[selected], a) == 0) {
-        /* append current messages after old session's messages */
-        MessageList *hist = agent_get_history(a);
-        for (int i = 0; i < cur_len; i++)
-          msg_list_push(hist, cur_items[i]);
-        free(cur_items);
-
-        session_set_current(paths[selected]);
-        /* delete incomplete file A if different from restored file */
-        session_delete_other(paths[selected]);
+      if (session_restore(entries[selected].session_id, a) == 0)
         result = 0;
-      } else {
-        /* restore failed, put current history back */
-        cur->items = cur_items;
-        cur->len = cur_len;
-        cur->cap = cur_len;
-      }
       break;
     } else if (c == 'q' || c == 'Q') {
       break;
@@ -265,12 +224,11 @@ static int interactive_session_select(Agent *a) {
   printf("\033[%dA", count + 1);
 
   if (result == 0)
-    printf("Session restored.\n");
+    printf("Session restored: %s\n", entries[selected].session_id);
   else
     printf("Cancelled.\n");
 
-  session_list_free(paths, previews, count);
-  return result;
+  session_list_free(entries, count);
 }
 
 /* --- Command implementations --- */
@@ -279,16 +237,51 @@ static void cmd_model(void) {
   interactive_model_select();
 }
 
-static void cmd_session(Agent *a) {
-  interactive_session_select(a);
+static void cmd_session(const char *args, Agent *a) {
+  if (args[0] == '\0' || strcmp(args, "restore") == 0) {
+    interactive_session_select(a);
+  } else if (strcmp(args, "new") == 0) {
+    if (session_new(a) == 0)
+      printf("Created new session: %s\n", session_current_id());
+    else
+      fprintf(stderr, "Failed to create new session\n");
+  } else if (strncmp(args, "name ", 5) == 0) {
+    const char *name = args + 5;
+    while (*name == ' ') name++;
+    if (session_rename(name) == 0)
+      printf("Session renamed to: %s\n", name);
+    else
+      fprintf(stderr, "Failed to rename session\n");
+  } else if (strncmp(args, "delete ", 7) == 0) {
+    const char *id = args + 7;
+    while (*id == ' ') id++;
+    if (session_delete(id) == 0)
+      printf("Deleted session: %s\n", id);
+    else
+      fprintf(stderr, "Failed to delete session (cannot delete active session)\n");
+  } else if (strncmp(args, "restore ", 8) == 0) {
+    const char *id = args + 8;
+    while (*id == ' ') id++;
+    if (session_restore(id, a) == 0)
+      printf("Restored session: %s\n", id);
+    else
+      fprintf(stderr, "Failed to restore session: %s\n", id);
+  } else {
+    fprintf(stderr, "Unknown /session subcommand: %s\n", args);
+    printf("Usage: /session [new|name <name>|delete <id>|restore [id]]\n");
+  }
 }
 
 static void cmd_help(void) {
   printf("Commands:\n");
-  printf("  /model    Interactive model picker\n");
-  printf("  /session  Browse and restore saved sessions\n");
-  printf("  /help     Show this help\n");
-  printf("  exit/quit/q  Exit\n");
+  printf("  /model            Interactive model picker\n");
+  printf("  /session          Browse and restore saved sessions\n");
+  printf("  /session new      Create a new session\n");
+  printf("  /session name X   Rename current session\n");
+  printf("  /session delete X Delete a session\n");
+  printf("  /session restore X Restore a session by id\n");
+  printf("  /help             Show this help\n");
+  printf("  exit/quit/q       Exit\n");
 }
 
 /* --- Dispatch --- */
@@ -299,8 +292,10 @@ int cmd_dispatch(const char *input, Agent *a) {
 
   if (strcmp(input, "/model") == 0) {
     cmd_model();
-  } else if (strcmp(input, "/session") == 0) {
-    cmd_session(a);
+  } else if (strncmp(input, "/session", 8) == 0) {
+    const char *args = input + 8;
+    while (*args == ' ') args++;
+    cmd_session(args, a);
   } else if (strcmp(input, "/help") == 0) {
     cmd_help();
   } else {

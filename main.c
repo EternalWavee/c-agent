@@ -22,6 +22,13 @@ int main(void) {
     return 1;
   }
 
+  /* Start with a fresh session */
+  int prev_count = 0;
+  if (isatty(STDIN_FILENO)) {
+    session_new(a);
+    prev_count = agent_history_count(a);
+  }
+
   ui_init();
   ui_start();
   ui_banner();
@@ -48,13 +55,18 @@ int main(void) {
     if (reply) {
       ui_idle();
       printf("%s\n", reply);
-      /* auto-save session after each chat (interactive only) */
-      if (isatty(STDIN_FILENO))
-        session_save(g_config.model, agent_get_history(a));
+      /* Append new messages to session log (interactive only) */
+      if (isatty(STDIN_FILENO)) {
+        if (session_append(a, prev_count) < 0)
+          fprintf(stderr, "session append failed\n");
+        prev_count = agent_history_count(a);
+      }
     }
   }
 
   ui_stop();
+  if (isatty(STDIN_FILENO))
+    session_shutdown(a);
   agent_free(a);
   return 0;
 }

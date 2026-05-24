@@ -24,7 +24,7 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 - **4 built-in tools** — `bash`, `read_file`, `write_file`, `edit_file`
 - **Parallel execution** — read-only tools dispatched concurrently via pthreads
 - **Context management** — automatic offload (large outputs to disk) and summary (LLM-based compression)
-- **Session persistence** — save and restore conversations across runs
+- **Session persistence** — append-only log + checkpoint architecture with crash recovery, auto-naming, and interactive session management
 - **Sandbox safety** — all file paths confined to the workspace directory
 - **Dangerous command filter** — blocks destructive shell patterns before execution
 - **Terminal UI** — real-time spinner and per-tool status display
@@ -59,6 +59,11 @@ export LLM_PORT="18080"
 ### Run
 
 ```bash
+# With caddy proxy (recommended)
+./start.sh
+
+# Or manually
+caddy reverse-proxy --from :18080 --to https://models.sjtu.edu.cn --change-host-header &
 ./build/c-agent
 ```
 
@@ -76,11 +81,11 @@ Type 'exit' to quit.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `API_KEY` | `none` | Bearer token for LLM authentication |
-| `MODEL_ID` | `qwen3coder` | Model identifier |
+| `MODEL_ID` | `deepseek-chat` | Model identifier |
 | `LLM_HOST` | `127.0.0.1` | LLM server host |
 | `LLM_PORT` | `18080` | LLM server port |
 | `MAX_TOKENS` | `8000` | Max tokens per LLM response |
-| `CONTEXT_WINDOW` | `8000` | Total token budget for conversation history |
+| `CONTEXT_WINDOW` | `32000` | Total token budget for conversation history |
 | `OFFLOAD_THRESHOLD` | `0.8` | Fraction of window that triggers output offload |
 | `SUMMARY_THRESHOLD` | `0.8` | Fraction of window that triggers history summarization |
 
@@ -91,7 +96,11 @@ Type 'exit' to quit.
 | Command | Description |
 |---------|-------------|
 | `/model` | Interactive model picker |
-| `/session` | Browse and restore saved sessions |
+| `/session` | Browse and restore saved sessions (interactive selector) |
+| `/session new` | Create a new session |
+| `/session name X` | Rename current session |
+| `/session delete X` | Delete a session |
+| `/session restore X` | Restore a session by id |
 | `/help` | Show available commands |
 | `exit` / `quit` / `q` | Exit |
 
@@ -121,6 +130,26 @@ Both are triggered by token budget thresholds and run before each LLM request.
 
 ---
 
+## Session System
+
+Each session is stored as a directory under `.agent/sessions/<id>/`:
+
+```
+.agent/sessions/
+  20260524_093000/
+    meta.json            # name, model, timestamps, message count
+    checkpoint.json      # full message snapshot (atomic write)
+    log.jsonl            # append-only log since last checkpoint
+```
+
+- Messages are appended to `log.jsonl` after each turn
+- Every 10 messages, a checkpoint is written and the log is truncated
+- On startup, a fresh session is created by default; use `/session` to restore previous ones
+- Sessions are auto-named with the last user message
+- Crash-safe: partial log lines are skipped on recovery
+
+---
+
 ## Testing
 
 ```bash
@@ -137,6 +166,9 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 ```
 .
 ├── main.c                  # Entry point and REPL
+├── session.c               # Session persistence (log + checkpoint)
+├── cmd.c                   # Slash command dispatch
+├── config.c                # Environment-based configuration
 ├── agent/
 │   ├── agent.c             # Core conversation loop (ReAct)
 │   └── llm_client.c        # HTTP transport + JSON wire format
@@ -157,6 +189,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 │   └── render.c            # Terminal rendering thread
 ├── libs/
 │   └── cJSON/              # JSON parser
+├── start.sh                # One-liner: caddy proxy + agent
 └── Makefile
 ```
 
@@ -173,7 +206,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - [x] Dangerous command filtering
 - [x] Context offload (large outputs to disk)
 - [x] Context summary (LLM-based history compression)
-- [x] Session save / restore
+- [x] Session persistence (append-only log + checkpoint, crash recovery, auto-naming)
 - [x] Terminal UI with spinner and per-tool status
 
 ### Planned
