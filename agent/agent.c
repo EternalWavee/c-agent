@@ -33,18 +33,30 @@ static const char AGENT_SYSTEM_TEMPLATE[] =
     "- Use the remember tool to store important findings: architecture decisions, build commands,\n"
     "  key file locations, coding conventions, user preferences, or anything worth knowing later.\n"
     "- Good memory entries are specific and concise. Example: 'Project uses cJSON for JSON parsing, source in libs/cJSON.c'\n"
-    "- Memory persists across sessions. What you remember now will help you in future conversations.";
+    "- Memory persists across sessions. What you remember now will help you in future conversations.\n\n"
+    "SubAgent:\n"
+    "- Use subagent_spawn to start child agents in the background for independent subtasks.\n"
+    "- Use subagent_status to check what subagents are running.\n"
+    "- Use subagent_wait to get a subagent's result when it's done.\n"
+    "- The child has its own context and runs autonomously — intermediate output stays out of your context.\n"
+    "- Good use cases: exploring a codebase, running multiple checks, searching for patterns.\n"
+    "- You can spawn multiple subagents for parallel work, then collect results.";
+
+/* Thread-local flag: true when a subagent is running to suppress UI */
+__thread bool g_agent_silent = false;
 
 struct Agent {
   char *system_prompt;
   char *last_reply;
   Context *ctx;
+  bool silent;  /* suppress UI output (for subagents) */
 };
 
-Agent *agent_create(void) {
+static Agent *agent_create_internal(bool silent) {
   Agent *a = calloc(1, sizeof(*a));
   if (!a)
     return NULL;
+  a->silent = silent;
 
   char *base_prompt = xasprintf(AGENT_SYSTEM_TEMPLATE, g_config.workdir);
   char *mem_text = memory_build_prompt();
@@ -61,6 +73,14 @@ Agent *agent_create(void) {
   return a;
 }
 
+Agent *agent_create(void) {
+  return agent_create_internal(false);
+}
+
+Agent *agent_create_silent(void) {
+  return agent_create_internal(true);
+}
+
 void agent_free(Agent *a) {
   if (!a)
     return;
@@ -71,6 +91,7 @@ void agent_free(Agent *a) {
 }
 
 const char *agent_chat(Agent *a, const char *user_input) {
+  g_agent_silent = a->silent;
   char *user_json = msg_user_json(user_input);
   ctx_push(a->ctx, user_json);
 
@@ -84,7 +105,7 @@ const char *agent_chat(Agent *a, const char *user_input) {
 
   LLMResponse resp;
   memset(&resp, 0, sizeof(resp));
-  ui_begin_thinking();
+  if (!a->silent) ui_begin_thinking();
   if (llm_chat((MessageList *)ctx_history(a->ctx), a->system_prompt,
                g_config.model, &resp, err, sizeof(err)) < 0) {
     fprintf(stderr, "LLM error: %s\n", err);
@@ -131,7 +152,7 @@ const char *agent_chat(Agent *a, const char *user_input) {
       return NULL;
     }
 
-    ui_begin_thinking();
+    if (!a->silent) ui_begin_thinking();
     if (llm_chat((MessageList *)ctx_history(a->ctx), a->system_prompt,
                  g_config.model, &resp, err, sizeof(err)) < 0) {
       fprintf(stderr, "llm_chat failed: %s\n", err);

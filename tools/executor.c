@@ -37,6 +37,8 @@
 #include <string.h>
 #include <pthread.h>
 
+extern __thread bool g_agent_silent;
+
 typedef struct {
     LLMToolCall *call;
     ToolDef *def;
@@ -53,7 +55,8 @@ static void run_one(ToolTask *task) {
             .output = xasprintf("unknown tool: %s", task->call->name ? task->call->name : "(null)"),
         };
     }
-    ui_tool_done(task->index, task->result.ok, task->result.output);
+    if (!g_agent_silent)
+        ui_tool_done(task->index, task->result.ok, task->result.output);
 }
 
 
@@ -93,7 +96,8 @@ int executor_run_tools(
         views[i].args_display = args_json[i];
     }
 
-    ui_begin_tools(count, views);
+    if (!g_agent_silent)
+        ui_begin_tools(count, views);
 
     /*
      * TODO(student, Phase B): when count >= 2 and every tasks[i].def is
@@ -132,7 +136,8 @@ int executor_run_tools(
     }
 
 
-    ui_idle();
+    if (!g_agent_silent)
+        ui_idle();
 
     int rc = 0;
     for (int i = 0; i < count; i++) {

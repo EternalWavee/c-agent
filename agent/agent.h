@@ -6,6 +6,7 @@
 typedef struct Agent Agent;
 
 Agent *agent_create(void);
+Agent *agent_create_silent(void);  /* no UI output (for subagents) */
 void agent_free(Agent *a);
 
 const char *agent_chat(Agent *a, const char *user_input);

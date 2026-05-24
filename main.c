@@ -66,6 +66,8 @@ int main(void) {
   }
 
   ui_stop();
+  extern void subagent_cleanup(void);
+  subagent_cleanup();
   if (isatty(STDIN_FILENO))
     session_shutdown(a);
   memory_shutdown();
