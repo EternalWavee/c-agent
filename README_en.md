@@ -41,6 +41,12 @@ export API_KEY="sjtu-api-key"
 
 ---
 
+## Milestone
+
+> 🚀 **2026.05.27** — c-agent takes shape with full tool-calling, memory management, and autonomous coding capabilities. Built on our C framework, powered by DeepSeek provided by Shanghai Jiao Tong University, this iteration was completed entirely through natural language instructions. [commit](https://github.com/EternalWavee/c-agent/commit/2b2475aadaeb43fde3a1b946ea977ec38496a56c)
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |

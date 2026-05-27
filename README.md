@@ -39,6 +39,12 @@ export API_KEY="SJTU-API密钥"
 
 ---
 
+## 里程碑
+
+> 🚀 **2026.05.27** — c-agent 初具雏形，具备完整的工具调用、记忆管理和自主编码能力。基于我们搭建的 C 框架，配合上海交通大学提供的 DeepSeek 模型，仅通过自然语言指令即完成了本次迭代。[commit](https://github.com/EternalWavee/c-agent/commit/2b2475aadaeb43fde3a1b946ea977ec38496a56c)
+
+---
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
