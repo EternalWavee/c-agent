@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_TURNS 20
 
@@ -58,13 +59,21 @@ static Agent *agent_create_internal(bool silent) {
     return NULL;
   a->silent = silent;
 
+  char time_buf[64];
+  time_t now = time(NULL);
+  struct tm *tm_now = localtime(&now);
+  strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S %Z", tm_now);
+
   char *base_prompt = xasprintf(AGENT_SYSTEM_TEMPLATE, g_config.workdir);
+  char *ts_prompt = xasprintf("%s\n\n## Current Time\nCurrent system time: %s\n", base_prompt, time_buf);
+  free(base_prompt);
+
   char *mem_text = memory_build_prompt();
   if (mem_text && mem_text[0])
-    a->system_prompt = xasprintf("%s\n\n## Project Memory\n%s", base_prompt, mem_text);
+    a->system_prompt = xasprintf("%s\n## Project Memory\n%s", ts_prompt, mem_text);
   else
-    a->system_prompt = xstrdup(base_prompt);
-  free(base_prompt);
+    a->system_prompt = xstrdup(ts_prompt);
+  free(ts_prompt);
   free(mem_text);
 
   a->ctx = ctx_create(g_config.context_window);
