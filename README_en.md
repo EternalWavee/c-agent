@@ -21,7 +21,7 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 ## Highlights
 
 - **ReAct loop** — multi-turn reasoning with tool calling until task completion
-- **4 built-in tools** — `bash`, `read_file`, `write_file`, `edit_file`
+- **11 built-in tools** — `bash`, `read_file`, `write_file`, `edit_file`, `remember`, `recall`, `memory_delete`, `memory_update`, `subagent_spawn`, `subagent_status`, `subagent_wait`
 - **Parallel execution** — read-only tools dispatched concurrently via pthreads
 - **Context management** — automatic offload (large outputs to disk) and summary (LLM-based compression)
 - **Session persistence** — append-only log + checkpoint architecture with crash recovery, auto-naming, and interactive session management
@@ -81,7 +81,12 @@ export API_KEY="sjtu-api-key"
 | `write_file` | Write contents to a file | No |
 | `edit_file` | Replace first occurrence of text in a file | No |
 | `remember` | Store knowledge into persistent project memory | No |
-| `recall` | Read project memory from previous sessions | Yes |
+| `recall` | Read project memory (supports keyword/type filtering) | Yes |
+| `memory_delete` | Delete a memory entry by index | No |
+| `memory_update` | Update a memory entry by index | No |
+| `subagent_spawn` | Spawn a background child agent for independent subtasks | No |
+| `subagent_status` | List all subagents and their status | Yes |
+| `subagent_wait` | Wait for a subagent to finish and get its result | No |
 
 Read-only tools are automatically dispatched in parallel. State-changing tools run serially.
 
@@ -153,7 +158,12 @@ On startup:     memory.md → injected into system prompt → agent "remembers"
 
 **Read paths:**
 - System prompt injection (automatic on startup)
-- LLM calls `recall` tool
+- LLM calls `recall` tool (supports `keyword` and `type` filters)
+
+**Modify / Delete:**
+- `recall` returns entries with `[index]` prefixes
+- LLM calls `memory_delete <index>` to remove an entry
+- LLM calls `memory_update <index> <content>` to replace an entry
 
 ---
 
@@ -186,13 +196,15 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 │   └── policy_summary.c    # Lossy compression via LLM
 ├── tools/
 │   ├── registry.c          # Static tool registry
+│   ├── init.c              # Tool registration initialization
 │   ├── executor.c          # Parallel / serial dispatch
 │   ├── sandbox.c           # Workspace path containment
 │   ├── bash.c              # Shell command execution
 │   ├── read.c              # File reader
 │   ├── write.c             # File writer
 │   ├── edit.c              # Substring replacement
-│   └── memory_tool.c       # remember + recall tools
+│   ├── memory_tool.c       # remember + recall + delete + update tools
+│   └── subagent.c          # Background child agents (spawn/status/wait)
 ├── ui/
 │   ├── ui.c                # Event dispatch
 │   └── render.c            # Terminal rendering thread
@@ -216,14 +228,16 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - [x] Context offload (large outputs to disk)
 - [x] Context summary (LLM-based history compression)
 - [x] Session persistence (append-only log + checkpoint, crash recovery, auto-naming)
-- [x] Project memory (LLM-driven persistent knowledge store in .agent/memory.md)
+- [x] Project memory (LLM-driven persistent knowledge store in .agent/memory.md) with filtering, delete, and update
 - [x] Terminal UI with spinner and per-tool status
+- [x] SubAgent (background child agents for parallel independent subtasks)
 
 ### Planned
 
 - [ ] **Evaluation harness** — end-to-end benchmark scenarios with metrics
-- [ ] **SubAgent** — spawn child agents for independent subtasks
-- [x] **Memory** — project-level knowledge persistence across sessions
+- [x] **SubAgent** — spawn child agents for independent subtasks
+- [x] **Memory** — project-level knowledge persistence across sessions, with filtering, delete, and update
+- [x] **SubAgent** — background child agents for parallel independent subtasks
 - [ ] **Skill system** — on-demand prompt injection for specialized tasks
 
 ---
@@ -232,7 +246,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 
 **Current limitations:**
 
-- **Limited tool set** — only 4 tools (`bash`, `read_file`, `write_file`, `edit_file`). Missing common capabilities like web search, codebase indexing, diff viewing, and git operations.
+- **Limited tool set** — 4 base tools (`bash`, `read_file`, `write_file`, `edit_file`) plus 7 extended tools (memory management, sub-agents). Still missing common capabilities like web search, codebase indexing, diff viewing, and git operations.
 - **No streaming** — LLM responses are received in full before display. Long responses feel unresponsive.
 - **Single-model support** — no easy way to switch between different LLM providers or mix models for different tasks.
 - **Basic context heuristics** — the token estimator is a rough character-count heuristic, not a real tokenizer. Budget thresholds may fire too early or too late.
@@ -244,8 +258,8 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - **Streaming output** — display LLM responses token-by-token for better perceived latency
 - **Plugin architecture** — allow users to register custom tools at runtime via shared libraries or config files
 - **Smarter context policies** — use actual tokenizers (tiktoken) and implement priority-based eviction (e.g. keep high-value tool results, drop low-info chat)
-- **Multi-agent collaboration** — let the main agent delegate subtasks to specialized child agents with isolated contexts
-- **Persistent memory** — store project-level knowledge (codebase structure, conventions, past decisions) that survives across sessions
+- **Multi-agent collaboration** — basic implementation done (`subagent_spawn`/`subagent_status`/`subagent_wait`), supports background parallel subtasks
+- **Persistent memory** — implemented (`remember`/`recall`/`memory_delete`/`memory_update`), supports filtering, deletion, and update
 
 ---
 

@@ -114,6 +114,177 @@ char *memory_recall(void) {
     return buf;
 }
 
+/* ── File line helpers (for delete/update/filter) ─────────────────── */
+
+static int is_memory_entry(const char *line) {
+    return strncmp(line, "- [", 3) == 0;
+}
+
+/* Parse type from "- [type] content" line. Returns pointer past ']', or NULL. */
+static const char *parse_entry_type(const char *line, char *type_buf, size_t cap) {
+    const char *start = line + 3; /* skip "- [" */
+    const char *end = strchr(start, ']');
+    if (!end) return NULL;
+    size_t len = (size_t)(end - start);
+    if (len >= cap) len = cap - 1;
+    memcpy(type_buf, start, len);
+    type_buf[len] = '\0';
+    return end + 2; /* skip "] " to point at content */
+}
+
+/* Read all lines from memory.md into a dynamic array. Returns line count. */
+static int read_lines(char ***lines_out) {
+    char path[PATH_MAX];
+    memory_path(path, sizeof(path));
+
+    FILE *f = fopen(path, "r");
+    if (!f) { *lines_out = NULL; return 0; }
+
+    int cap = 64, count = 0;
+    char **lines = xmalloc((size_t)cap * sizeof(char *));
+    char buf[4096];
+
+    while (fgets(buf, sizeof(buf), f)) {
+        if (count >= cap) { cap *= 2; lines = xrealloc(lines, (size_t)cap * sizeof(char *)); }
+        /* strip trailing newline */
+        size_t len = strlen(buf);
+        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) buf[--len] = '\0';
+        lines[count++] = xstrdup(buf);
+    }
+    fclose(f);
+    *lines_out = lines;
+    return count;
+}
+
+static void free_lines(char **lines, int count) {
+    if (!lines) return;
+    for (int i = 0; i < count; i++) free(lines[i]);
+    free(lines);
+}
+
+/* Write lines back to memory.md atomically (tmp + rename). */
+static int write_lines(char **lines, int count) {
+    char path[PATH_MAX];
+    char tmp[PATH_MAX];
+    memory_path(path, sizeof(path));
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+
+    FILE *f = fopen(tmp, "w");
+    if (!f) return -1;
+    for (int i = 0; i < count; i++)
+        fprintf(f, "%s\n", lines[i]);
+    fflush(f);
+    fclose(f);
+
+    if (rename(tmp, path) != 0) { remove(tmp); return -1; }
+    return 0;
+}
+
+/* ── Delete ─────────────────────────────────────────────────────── */
+
+int memory_delete(int index) {
+    if (index < 0) return -1;
+
+    char **lines;
+    int count = read_lines(&lines);
+
+    /* Find the target entry and the line index to remove */
+    int entry_idx = 0;
+    int target_line = -1;
+    for (int i = 0; i < count; i++) {
+        if (is_memory_entry(lines[i])) {
+            if (entry_idx == index) { target_line = i; break; }
+            entry_idx++;
+        }
+    }
+
+    if (target_line < 0) { free_lines(lines, count); return -1; }
+
+    /* Remove the line by shifting */
+    free(lines[target_line]);
+    for (int i = target_line; i < count - 1; i++)
+        lines[i] = lines[i + 1];
+    count--;
+
+    int rc = write_lines(lines, count);
+    free_lines(lines, count);
+    return rc;
+}
+
+/* ── Update ─────────────────────────────────────────────────────── */
+
+int memory_update(int index, const char *content, MemoryType type) {
+    if (index < 0 || !content || !content[0]) return -1;
+
+    char **lines;
+    int count = read_lines(&lines);
+
+    int entry_idx = 0;
+    int target_line = -1;
+    for (int i = 0; i < count; i++) {
+        if (is_memory_entry(lines[i])) {
+            if (entry_idx == index) { target_line = i; break; }
+            entry_idx++;
+        }
+    }
+
+    if (target_line < 0) { free_lines(lines, count); return -1; }
+
+    /* Replace the line */
+    free(lines[target_line]);
+    lines[target_line] = xasprintf("- [%s] %s", memory_type_str(type), content);
+
+    int rc = write_lines(lines, count);
+    free_lines(lines, count);
+    return rc;
+}
+
+/* ── Filtered recall ────────────────────────────────────────────── */
+
+char *memory_recall_filtered(const char *keyword, const char *type_str) {
+    char **lines;
+    int count = read_lines(&lines);
+    if (count == 0) { *lines = NULL; return NULL; }
+
+    size_t cap = 4096, len = 0;
+    char *buf = xmalloc(cap);
+    buf[0] = '\0';
+
+    int entry_idx = 0;
+    for (int i = 0; i < count; i++) {
+        if (!is_memory_entry(lines[i])) continue;
+
+        char type_buf[32];
+        const char *content = parse_entry_type(lines[i], type_buf, sizeof(type_buf));
+        if (!content) { entry_idx++; continue; }
+
+        /* Type filter */
+        if (type_str && type_str[0] && strcmp(type_buf, type_str) != 0) {
+            entry_idx++;
+            continue;
+        }
+
+        /* Keyword filter */
+        if (keyword && keyword[0] && !strstr(content, keyword)) {
+            entry_idx++;
+            continue;
+        }
+
+        /* Format: [index] [type] content */
+        size_t need = strlen(type_buf) + strlen(content) + 32;
+        while (len + need > cap) { cap *= 2; buf = xrealloc(buf, cap); }
+        int n = snprintf(buf + len, cap - len, "[%d] [%s] %s\n",
+                         entry_idx, type_buf, content);
+        if (n > 0) len += (size_t)n;
+        entry_idx++;
+    }
+
+    free_lines(lines, count);
+
+    if (len == 0) { free(buf); return NULL; }
+    return buf;
+}
+
 /* ── Auto-capture from tool calls ────────────────────────────────── */
 
 void memory_observe(const char *tool_name, const char *tool_args,

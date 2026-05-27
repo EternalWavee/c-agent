@@ -22,45 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/*
- * Each tool implementation file declares a single ToolDef as a file-scope
- * static, then exposes it through a non-static "*_def" symbol. The registry
- * names them through the externs below. The handout says explicitly: this
- * is the only file that names every tool by symbol; one new file in tools/
- * plus four lines added here is the full diff for a new tool.
- */
-extern ToolDef bash_def;
-extern ToolDef read_file_def;
-extern ToolDef write_file_def;
-extern ToolDef edit_file_def;
-extern ToolDef remember_tool_def;
-extern ToolDef recall_tool_def;
-extern ToolDef subagent_spawn_def;
-extern ToolDef subagent_status_def;
-extern ToolDef subagent_wait_def;
-
-
 static ToolDef *g_tools[MAX_REGISTERED_TOOLS];
 static int g_tools_count = 0;
-
-void tools_init(void) {
-    if (g_tools_count > 0)
-        return;
-
-    tool_register(&bash_def);
-    /* TODO(student, Phase A.3): register read_file_def, write_file_def,
-       edit_file_def here, in this exact order so that test output is
-       deterministic. */
-
-    tool_register(&read_file_def);
-    tool_register(&write_file_def);
-    tool_register(&edit_file_def);
-    tool_register(&remember_tool_def);
-    tool_register(&recall_tool_def);
-    tool_register(&subagent_spawn_def);
-    tool_register(&subagent_status_def);
-    tool_register(&subagent_wait_def);
-}
 
 void tool_register(ToolDef *def) {
     if (g_tools_count >= MAX_REGISTERED_TOOLS) {

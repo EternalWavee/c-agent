@@ -39,6 +39,16 @@ int  memory_remember(const char *content, MemoryType type);
 /* Read full memory.md (caller frees) */
 char *memory_recall(void);
 
+/* Read filtered memory. keyword and/or type_str can be NULL (no filter).
+ * Returns formatted string with 0-based line indices. Caller frees. */
+char *memory_recall_filtered(const char *keyword, const char *type_str);
+
+/* Delete memory entry at index (0-based). Returns 0 on success, -1 on error. */
+int memory_delete(int index);
+
+/* Replace memory entry at index with new content+type. Returns 0 on success, -1 on error. */
+int memory_update(int index, const char *content, MemoryType type);
+
 /* Auto-capture: store observation in short-term buffer (no disk write) */
 void memory_observe(const char *tool_name, const char *tool_args,
                     const char *tool_output);
