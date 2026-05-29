@@ -4,13 +4,13 @@
 #include <stddef.h>
 
 /*
- * Project-level persistent memory with short-term → long-term consolidation.
+ * Project-level persistent memory.
  *
  * Short-term: in-memory observation buffer, auto-captured from tool calls.
- * Long-term: .agent/memory.md, categorized markdown, injected into system prompt.
+ * Long-term: .agent/memory/MEMORY.md index plus typed memory files.
  *
- * On session shutdown, observations are consolidated into long-term memory
- * via two LLM calls: extract → merge.
+ * The six memory types are stable: pattern, preference, architecture,
+ * bug, workflow, and fact.
  */
 
 #define MEMORY_OBS_MAX 64
@@ -33,10 +33,10 @@ typedef struct {
 int  memory_init(void);
 void memory_shutdown(void);
 
-/* Append a typed memory entry to .agent/memory.md */
+/* Append a typed memory entry to .agent/memory/<type>.md */
 int  memory_remember(const char *content, MemoryType type);
 
-/* Read full memory.md (caller frees) */
+/* Read all typed memory entries with stable global indices (caller frees) */
 char *memory_recall(void);
 
 /* Read filtered memory. keyword and/or type_str can be NULL (no filter).
@@ -53,10 +53,10 @@ int memory_update(int index, const char *content, MemoryType type);
 void memory_observe(const char *tool_name, const char *tool_args,
                     const char *tool_output);
 
-/* Consolidate: short-term observations → long-term memory.md (two LLM calls) */
+/* Consolidate observations. Currently clears pending observations; future work uses a restricted memory subagent. */
 int  memory_consolidate(char *err, size_t err_cap);
 
-/* Build system prompt snippet from memory.md (caller frees) */
+/* Build system prompt snippet from typed memory files (caller frees) */
 char *memory_build_prompt(void);
 
 /* Convert MemoryType to string */

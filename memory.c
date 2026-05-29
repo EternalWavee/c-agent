@@ -1,31 +1,92 @@
 #include "memory.h"
 
-#include "agent/llm_client.h"
 #include "config.h"
-#include "message.h"
 #include "util.h"
 
+#include <errno.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
-/* ── Path helper ─────────────────────────────────────────────────── */
+/* ── Memory layout ─────────────────────────────────────────────────
+ *
+ * .agent/memory/
+ *   MEMORY.md          index only
+ *   pattern.md         typed topic files, one bullet per memory
+ *   preference.md
+ *   architecture.md
+ *   bug.md
+ *   workflow.md
+ *   fact.md
+ */
 
-static void memory_path(char *buf, size_t cap) {
+typedef struct {
+    MemoryType type;
+    const char *name;
+    const char *title;
+    const char *description;
+    const char *filename;
+} MemoryTypeInfo;
+
+static const MemoryTypeInfo TYPE_INFO[] = {
+    {MEM_PATTERN, "pattern", "Patterns", "Coding patterns and conventions", "pattern.md"},
+    {MEM_PREFERENCE, "preference", "Preferences", "User preferences and interaction style", "preference.md"},
+    {MEM_ARCHITECTURE, "architecture", "Architecture", "Project architecture and module responsibilities", "architecture.md"},
+    {MEM_BUG, "bug", "Bugs", "Known bugs, risks, and fixes", "bug.md"},
+    {MEM_WORKFLOW, "workflow", "Workflows", "Build, test, run, and operational workflows", "workflow.md"},
+    {MEM_FACT, "fact", "Facts", "General project facts", "fact.md"},
+};
+
+#define TYPE_COUNT ((int)(sizeof(TYPE_INFO) / sizeof(TYPE_INFO[0])))
+
+static const MemoryTypeInfo *type_info(MemoryType type);
+
+/* ── Path helpers ────────────────────────────────────────────────── */
+
+static void agent_dir_path(char *buf, size_t cap) {
+    snprintf(buf, cap, "%s/.agent", g_config.workdir);
+}
+
+static void memory_dir_path(char *buf, size_t cap) {
+    snprintf(buf, cap, "%s/.agent/memory", g_config.workdir);
+}
+
+static void memory_index_path(char *buf, size_t cap) {
+    snprintf(buf, cap, "%s/.agent/memory/MEMORY.md", g_config.workdir);
+}
+
+static void memory_type_path(MemoryType type, char *buf, size_t cap) {
+    char dir[PATH_MAX];
+    memory_dir_path(dir, sizeof(dir));
+    snprintf(buf, cap, "%s/%s", dir, type_info(type)->filename);
+}
+
+static void legacy_memory_path(char *buf, size_t cap) {
     snprintf(buf, cap, "%s/.agent/memory.md", g_config.workdir);
 }
 
-/* ── Type names ──────────────────────────────────────────────────── */
-
-static const char *TYPE_NAMES[] = {
-    "pattern", "preference", "architecture", "bug", "workflow", "fact",
-};
+static const MemoryTypeInfo *type_info(MemoryType type) {
+    if (type >= 0 && type < TYPE_COUNT)
+        return &TYPE_INFO[type];
+    return &TYPE_INFO[MEM_FACT];
+}
 
 const char *memory_type_str(MemoryType type) {
-    if (type >= 0 && type <= MEM_FACT)
-        return TYPE_NAMES[type];
-    return "fact";
+    return type_info(type)->name;
+}
+
+static MemoryType parse_type_name(const char *name) {
+    if (!name)
+        return MEM_FACT;
+    for (int i = 0; i < TYPE_COUNT; i++) {
+        if (strcmp(name, TYPE_INFO[i].name) == 0)
+            return TYPE_INFO[i].type;
+    }
+    return MEM_FACT;
 }
 
 /* ── Short-term observation buffer ───────────────────────────────── */
@@ -41,7 +102,6 @@ static void obs_clear(void) {
 
 static void obs_add(const char *content, MemoryType type) {
     if (obs_count >= MEMORY_OBS_MAX) {
-        /* Ring buffer: drop oldest */
         free(obs_buf[0].content);
         memmove(&obs_buf[0], &obs_buf[1],
                 (MEMORY_OBS_MAX - 1) * sizeof(MemoryObservation));
@@ -52,23 +112,295 @@ static void obs_add(const char *content, MemoryType type) {
     obs_count++;
 }
 
+/* ── Small file helpers ──────────────────────────────────────────── */
+
+static int ensure_dir(const char *path) {
+    if (mkdir(path, 0755) != 0 && errno != EEXIST)
+        return -1;
+    return 0;
+}
+
+static char *read_file_text(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) {
+        fclose(f);
+        return xstrdup("");
+    }
+    char *buf = xmalloc((size_t)sz + 1);
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    buf[n] = '\0';
+    fclose(f);
+    return buf;
+}
+
+static int write_file_text_atomic(const char *path, const char *content) {
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+
+    FILE *f = fopen(tmp, "w");
+    if (!f)
+        return -1;
+    if (content && content[0])
+        fwrite(content, 1, strlen(content), f);
+    fflush(f);
+    fclose(f);
+
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return -1;
+    }
+    return 0;
+}
+
+static int append_str(char **buf, size_t *len, size_t *cap, const char *s) {
+    size_t need = strlen(s);
+    while (*len + need + 1 > *cap) {
+        *cap *= 2;
+        *buf = xrealloc(*buf, *cap);
+    }
+    memcpy(*buf + *len, s, need);
+    *len += need;
+    (*buf)[*len] = '\0';
+    return 0;
+}
+
+static int append_fmt(char **buf, size_t *len, size_t *cap, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    va_list ap2;
+    va_copy(ap2, ap);
+    int needed = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (needed < 0) {
+        va_end(ap2);
+        return -1;
+    }
+    while (*len + (size_t)needed + 1 > *cap) {
+        *cap *= 2;
+        *buf = xrealloc(*buf, *cap);
+    }
+    vsnprintf(*buf + *len, *cap - *len, fmt, ap2);
+    va_end(ap2);
+    *len += (size_t)needed;
+    return 0;
+}
+
+static char *trim_copy(const char *start, size_t len) {
+    while (len > 0 && (*start == ' ' || *start == '\t')) {
+        start++;
+        len--;
+    }
+    while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t' ||
+                       start[len - 1] == '\r' || start[len - 1] == '\n'))
+        len--;
+    char *out = xmalloc(len + 1);
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return out;
+}
+
+/* ── Typed memory files ──────────────────────────────────────────── */
+
+static char *type_file_header(MemoryType type) {
+    const MemoryTypeInfo *info = type_info(type);
+    return xasprintf("---\n"
+                     "name: %s\n"
+                     "description: %s\n"
+                     "type: %s\n"
+                     "---\n\n",
+                     info->title, info->description, info->name);
+}
+
+static int ensure_type_file(MemoryType type) {
+    char path[PATH_MAX];
+    memory_type_path(type, path, sizeof(path));
+
+    FILE *f = fopen(path, "r");
+    if (f) {
+        fclose(f);
+        return 0;
+    }
+
+    char *header = type_file_header(type);
+    int rc = write_file_text_atomic(path, header);
+    free(header);
+    return rc;
+}
+
+static int write_index_file(void) {
+    char path[PATH_MAX];
+    memory_index_path(path, sizeof(path));
+
+    size_t cap = 2048, len = 0;
+    char *buf = xmalloc(cap);
+    buf[0] = '\0';
+    append_str(&buf, &len, &cap, "# Project Memory\n\n");
+    for (int i = 0; i < TYPE_COUNT; i++) {
+        append_fmt(&buf, &len, &cap, "- [%s](%s) - %s\n",
+                   TYPE_INFO[i].title, TYPE_INFO[i].filename,
+                   TYPE_INFO[i].description);
+    }
+
+    int rc = write_file_text_atomic(path, buf);
+    free(buf);
+    return rc;
+}
+
+static int read_entries_for_type(MemoryType type, char ***entries_out) {
+    *entries_out = NULL;
+    char path[PATH_MAX];
+    memory_type_path(type, path, sizeof(path));
+
+    char *text = read_file_text(path);
+    if (!text)
+        return 0;
+
+    int cap = 16, count = 0;
+    char **entries = xmalloc((size_t)cap * sizeof(char *));
+    const char *p = text;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        if (len >= 2 && p[0] == '-' && p[1] == ' ') {
+            char *entry = trim_copy(p + 2, len - 2);
+            if (entry[0]) {
+                if (count >= cap) {
+                    cap *= 2;
+                    entries = xrealloc(entries, (size_t)cap * sizeof(char *));
+                }
+                entries[count++] = entry;
+            } else {
+                free(entry);
+            }
+        }
+        p = nl ? nl + 1 : p + len;
+    }
+    free(text);
+
+    if (count == 0) {
+        free(entries);
+        return 0;
+    }
+    *entries_out = entries;
+    return count;
+}
+
+static void free_entries(char **entries, int count) {
+    if (!entries)
+        return;
+    for (int i = 0; i < count; i++)
+        free(entries[i]);
+    free(entries);
+}
+
+static int write_entries_for_type(MemoryType type, char **entries, int count) {
+    char path[PATH_MAX];
+    memory_type_path(type, path, sizeof(path));
+
+    size_t cap = 2048, len = 0;
+    char *buf = type_file_header(type);
+    len = strlen(buf);
+    cap = len + 2048;
+    buf = xrealloc(buf, cap);
+
+    for (int i = 0; i < count; i++)
+        append_fmt(&buf, &len, &cap, "- %s\n", entries[i]);
+
+    int rc = write_file_text_atomic(path, buf);
+    free(buf);
+    return rc;
+}
+
+static int append_entry_unique(MemoryType type, const char *content) {
+    char **entries = NULL;
+    int count = read_entries_for_type(type, &entries);
+    for (int i = 0; i < count; i++) {
+        if (strcmp(entries[i], content) == 0) {
+            free_entries(entries, count);
+            return 0;
+        }
+    }
+
+    entries = xrealloc(entries, (size_t)(count + 1) * sizeof(char *));
+    entries[count++] = xstrdup(content);
+    int rc = write_entries_for_type(type, entries, count);
+    free_entries(entries, count);
+    return rc;
+}
+
+static int parse_legacy_entry(const char *line, MemoryType *type_out, char **content_out) {
+    if (strncmp(line, "- [", 3) != 0)
+        return 0;
+    const char *type_start = line + 3;
+    const char *type_end = strchr(type_start, ']');
+    if (!type_end || type_end[1] != ' ')
+        return 0;
+
+    char type_buf[32];
+    size_t type_len = (size_t)(type_end - type_start);
+    if (type_len >= sizeof(type_buf))
+        type_len = sizeof(type_buf) - 1;
+    memcpy(type_buf, type_start, type_len);
+    type_buf[type_len] = '\0';
+
+    *type_out = parse_type_name(type_buf);
+    *content_out = trim_copy(type_end + 2, strlen(type_end + 2));
+    return (*content_out)[0] != '\0';
+}
+
+static void migrate_legacy_memory(void) {
+    char path[PATH_MAX];
+    legacy_memory_path(path, sizeof(path));
+
+    char *text = read_file_text(path);
+    if (!text || !text[0]) {
+        free(text);
+        return;
+    }
+
+    const char *p = text;
+    while (*p) {
+        const char *nl = strchr(p, '\n');
+        size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        char *line = trim_copy(p, len);
+        MemoryType type;
+        char *content = NULL;
+        if (parse_legacy_entry(line, &type, &content))
+            append_entry_unique(type, content);
+        free(content);
+        free(line);
+        p = nl ? nl + 1 : p + len;
+    }
+    free(text);
+}
+
 /* ── Lifecycle ───────────────────────────────────────────────────── */
 
 int memory_init(void) {
     char agent_dir[PATH_MAX];
-    snprintf(agent_dir, sizeof(agent_dir), "%s/.agent", g_config.workdir);
-    mkdir(agent_dir, 0755);
+    agent_dir_path(agent_dir, sizeof(agent_dir));
+    if (ensure_dir(agent_dir) < 0)
+        return -1;
 
-    char path[PATH_MAX];
-    memory_path(path, sizeof(path));
+    char memory_dir[PATH_MAX];
+    memory_dir_path(memory_dir, sizeof(memory_dir));
+    if (ensure_dir(memory_dir) < 0)
+        return -1;
 
-    FILE *f = fopen(path, "r");
-    if (f) { fclose(f); return 0; }
+    if (write_index_file() < 0)
+        return -1;
 
-    f = fopen(path, "w");
-    if (!f) return -1;
-    fprintf(f, "# Project Memory\n\n");
-    fclose(f);
+    for (int i = 0; i < TYPE_COUNT; i++) {
+        if (ensure_type_file(TYPE_INFO[i].type) < 0)
+            return -1;
+    }
+
+    migrate_legacy_memory();
     return 0;
 }
 
@@ -76,213 +408,137 @@ void memory_shutdown(void) {
     obs_clear();
 }
 
-/* ── Remember (write to long-term) ───────────────────────────────── */
+/* ── Remember / recall ───────────────────────────────────────────── */
 
 int memory_remember(const char *content, MemoryType type) {
-    if (!content || !content[0]) return -1;
-
-    char path[PATH_MAX];
-    memory_path(path, sizeof(path));
-
-    FILE *f = fopen(path, "a");
-    if (!f) return -1;
-
-    fprintf(f, "- [%s] %s\n", memory_type_str(type), content);
-    fflush(f);
-    fclose(f);
-    return 0;
+    if (!content || !content[0])
+        return -1;
+    return append_entry_unique(type, content);
 }
-
-/* ── Recall (read long-term) ─────────────────────────────────────── */
-
-char *memory_recall(void) {
-    char path[PATH_MAX];
-    memory_path(path, sizeof(path));
-
-    FILE *f = fopen(path, "r");
-    if (!f) return NULL;
-
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (sz <= 0) { fclose(f); return NULL; }
-
-    char *buf = xmalloc((size_t)sz + 1);
-    fread(buf, 1, (size_t)sz, f);
-    buf[sz] = '\0';
-    fclose(f);
-    return buf;
-}
-
-/* ── File line helpers (for delete/update/filter) ─────────────────── */
-
-static int is_memory_entry(const char *line) {
-    return strncmp(line, "- [", 3) == 0;
-}
-
-/* Parse type from "- [type] content" line. Returns pointer past ']', or NULL. */
-static const char *parse_entry_type(const char *line, char *type_buf, size_t cap) {
-    const char *start = line + 3; /* skip "- [" */
-    const char *end = strchr(start, ']');
-    if (!end) return NULL;
-    size_t len = (size_t)(end - start);
-    if (len >= cap) len = cap - 1;
-    memcpy(type_buf, start, len);
-    type_buf[len] = '\0';
-    return end + 2; /* skip "] " to point at content */
-}
-
-/* Read all lines from memory.md into a dynamic array. Returns line count. */
-static int read_lines(char ***lines_out) {
-    char path[PATH_MAX];
-    memory_path(path, sizeof(path));
-
-    FILE *f = fopen(path, "r");
-    if (!f) { *lines_out = NULL; return 0; }
-
-    int cap = 64, count = 0;
-    char **lines = xmalloc((size_t)cap * sizeof(char *));
-    char buf[4096];
-
-    while (fgets(buf, sizeof(buf), f)) {
-        if (count >= cap) { cap *= 2; lines = xrealloc(lines, (size_t)cap * sizeof(char *)); }
-        /* strip trailing newline */
-        size_t len = strlen(buf);
-        while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) buf[--len] = '\0';
-        lines[count++] = xstrdup(buf);
-    }
-    fclose(f);
-    *lines_out = lines;
-    return count;
-}
-
-static void free_lines(char **lines, int count) {
-    if (!lines) return;
-    for (int i = 0; i < count; i++) free(lines[i]);
-    free(lines);
-}
-
-/* Write lines back to memory.md atomically (tmp + rename). */
-static int write_lines(char **lines, int count) {
-    char path[PATH_MAX];
-    char tmp[PATH_MAX];
-    memory_path(path, sizeof(path));
-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-
-    FILE *f = fopen(tmp, "w");
-    if (!f) return -1;
-    for (int i = 0; i < count; i++)
-        fprintf(f, "%s\n", lines[i]);
-    fflush(f);
-    fclose(f);
-
-    if (rename(tmp, path) != 0) { remove(tmp); return -1; }
-    return 0;
-}
-
-/* ── Delete ─────────────────────────────────────────────────────── */
-
-int memory_delete(int index) {
-    if (index < 0) return -1;
-
-    char **lines;
-    int count = read_lines(&lines);
-
-    /* Find the target entry and the line index to remove */
-    int entry_idx = 0;
-    int target_line = -1;
-    for (int i = 0; i < count; i++) {
-        if (is_memory_entry(lines[i])) {
-            if (entry_idx == index) { target_line = i; break; }
-            entry_idx++;
-        }
-    }
-
-    if (target_line < 0) { free_lines(lines, count); return -1; }
-
-    /* Remove the line by shifting */
-    free(lines[target_line]);
-    for (int i = target_line; i < count - 1; i++)
-        lines[i] = lines[i + 1];
-    count--;
-
-    int rc = write_lines(lines, count);
-    free_lines(lines, count);
-    return rc;
-}
-
-/* ── Update ─────────────────────────────────────────────────────── */
-
-int memory_update(int index, const char *content, MemoryType type) {
-    if (index < 0 || !content || !content[0]) return -1;
-
-    char **lines;
-    int count = read_lines(&lines);
-
-    int entry_idx = 0;
-    int target_line = -1;
-    for (int i = 0; i < count; i++) {
-        if (is_memory_entry(lines[i])) {
-            if (entry_idx == index) { target_line = i; break; }
-            entry_idx++;
-        }
-    }
-
-    if (target_line < 0) { free_lines(lines, count); return -1; }
-
-    /* Replace the line */
-    free(lines[target_line]);
-    lines[target_line] = xasprintf("- [%s] %s", memory_type_str(type), content);
-
-    int rc = write_lines(lines, count);
-    free_lines(lines, count);
-    return rc;
-}
-
-/* ── Filtered recall ────────────────────────────────────────────── */
 
 char *memory_recall_filtered(const char *keyword, const char *type_str) {
-    char **lines;
-    int count = read_lines(&lines);
-    if (count == 0) { *lines = NULL; return NULL; }
-
     size_t cap = 4096, len = 0;
     char *buf = xmalloc(cap);
     buf[0] = '\0';
 
     int entry_idx = 0;
-    for (int i = 0; i < count; i++) {
-        if (!is_memory_entry(lines[i])) continue;
+    bool any = false;
+    MemoryType only_type = parse_type_name(type_str);
+    bool filter_type = type_str && type_str[0];
 
-        char type_buf[32];
-        const char *content = parse_entry_type(lines[i], type_buf, sizeof(type_buf));
-        if (!content) { entry_idx++; continue; }
-
-        /* Type filter */
-        if (type_str && type_str[0] && strcmp(type_buf, type_str) != 0) {
-            entry_idx++;
+    for (int t = 0; t < TYPE_COUNT; t++) {
+        MemoryType type = TYPE_INFO[t].type;
+        if (filter_type && type != only_type) {
+            char **skip_entries = NULL;
+            int skip_count = read_entries_for_type(type, &skip_entries);
+            entry_idx += skip_count;
+            free_entries(skip_entries, skip_count);
             continue;
         }
 
-        /* Keyword filter */
-        if (keyword && keyword[0] && !strstr(content, keyword)) {
+        char **entries = NULL;
+        int count = read_entries_for_type(type, &entries);
+        for (int i = 0; i < count; i++) {
+            if (keyword && keyword[0] && !strstr(entries[i], keyword)) {
+                entry_idx++;
+                continue;
+            }
+            append_fmt(&buf, &len, &cap, "[%d] [%s] %s\n",
+                       entry_idx, memory_type_str(type), entries[i]);
+            any = true;
             entry_idx++;
-            continue;
         }
-
-        /* Format: [index] [type] content */
-        size_t need = strlen(type_buf) + strlen(content) + 32;
-        while (len + need > cap) { cap *= 2; buf = xrealloc(buf, cap); }
-        int n = snprintf(buf + len, cap - len, "[%d] [%s] %s\n",
-                         entry_idx, type_buf, content);
-        if (n > 0) len += (size_t)n;
-        entry_idx++;
+        free_entries(entries, count);
     }
 
-    free_lines(lines, count);
-
-    if (len == 0) { free(buf); return NULL; }
+    if (!any) {
+        free(buf);
+        return NULL;
+    }
     return buf;
+}
+
+char *memory_recall(void) {
+    return memory_recall_filtered(NULL, NULL);
+}
+
+/* ── Delete / update by global index ─────────────────────────────── */
+
+static int find_index_location(int index, MemoryType *type_out, int *local_out) {
+    if (index < 0)
+        return -1;
+
+    int entry_idx = 0;
+    for (int t = 0; t < TYPE_COUNT; t++) {
+        char **entries = NULL;
+        int count = read_entries_for_type(TYPE_INFO[t].type, &entries);
+        free_entries(entries, count);
+        if (index < entry_idx + count) {
+            *type_out = TYPE_INFO[t].type;
+            *local_out = index - entry_idx;
+            return 0;
+        }
+        entry_idx += count;
+    }
+    return -1;
+}
+
+int memory_delete(int index) {
+    MemoryType type;
+    int local;
+    if (find_index_location(index, &type, &local) < 0)
+        return -1;
+
+    char **entries = NULL;
+    int count = read_entries_for_type(type, &entries);
+    if (local < 0 || local >= count) {
+        free_entries(entries, count);
+        return -1;
+    }
+
+    free(entries[local]);
+    for (int i = local; i < count - 1; i++)
+        entries[i] = entries[i + 1];
+    count--;
+
+    int rc = write_entries_for_type(type, entries, count);
+    free_entries(entries, count);
+    return rc;
+}
+
+int memory_update(int index, const char *content, MemoryType new_type) {
+    if (!content || !content[0])
+        return -1;
+
+    MemoryType old_type;
+    int local;
+    if (find_index_location(index, &old_type, &local) < 0)
+        return -1;
+
+    char **entries = NULL;
+    int count = read_entries_for_type(old_type, &entries);
+    if (local < 0 || local >= count) {
+        free_entries(entries, count);
+        return -1;
+    }
+
+    if (old_type == new_type) {
+        free(entries[local]);
+        entries[local] = xstrdup(content);
+        int rc = write_entries_for_type(old_type, entries, count);
+        free_entries(entries, count);
+        return rc;
+    }
+
+    free(entries[local]);
+    for (int i = local; i < count - 1; i++)
+        entries[i] = entries[i + 1];
+    count--;
+    int rc = write_entries_for_type(old_type, entries, count);
+    free_entries(entries, count);
+    if (rc < 0)
+        return -1;
+    return append_entry_unique(new_type, content);
 }
 
 /* ── Auto-capture from tool calls ────────────────────────────────── */
@@ -290,193 +546,70 @@ char *memory_recall_filtered(const char *keyword, const char *type_str) {
 void memory_observe(const char *tool_name, const char *tool_args,
                     const char *tool_output) {
     (void)tool_output;
-    if (!tool_name) return;
+    if (!tool_name)
+        return;
 
     MemoryType type = MEM_FACT;
     char content[1024];
 
     if (strcmp(tool_name, "write_file") == 0) {
         type = MEM_PATTERN;
-        const char *path = strstr(tool_args, "\"path\"");
-        snprintf(content, sizeof(content), "wrote file %s",
-                 path ? path : "(unknown)");
+        snprintf(content, sizeof(content), "wrote file %.200s", tool_args ? tool_args : "(unknown)");
     } else if (strcmp(tool_name, "edit_file") == 0) {
         type = MEM_PATTERN;
-        const char *path = strstr(tool_args, "\"path\"");
-        snprintf(content, sizeof(content), "edited file %s",
-                 path ? path : "(unknown)");
+        snprintf(content, sizeof(content), "edited file %.200s", tool_args ? tool_args : "(unknown)");
     } else if (strcmp(tool_name, "bash") == 0) {
         type = MEM_WORKFLOW;
-        const char *cmd = strstr(tool_args, "\"command\"");
-        snprintf(content, sizeof(content), "ran: %.200s",
-                 cmd ? cmd : "(unknown)");
+        snprintf(content, sizeof(content), "ran %.200s", tool_args ? tool_args : "(unknown)");
     } else if (strcmp(tool_name, "read_file") == 0) {
         type = MEM_FACT;
-        const char *path = strstr(tool_args, "\"path\"");
-        snprintf(content, sizeof(content), "read file %s",
-                 path ? path : "(unknown)");
+        snprintf(content, sizeof(content), "read file %.200s", tool_args ? tool_args : "(unknown)");
     } else {
-        return; /* ignore other tools */
+        return;
     }
 
     obs_add(content, type);
 }
 
-/* ── LLM consolidation helpers ───────────────────────────────────── */
-
-static const char *EXTRACT_SYSTEM =
-    "You are a memory extraction engine. Given a list of tool call "
-    "observations from a coding session, extract concise knowledge entries.\n\n"
-    "For each observation, output ONE line in this exact format:\n"
-    "- [type] knowledge\n\n"
-    "Where type is one of: pattern, preference, architecture, bug, workflow, fact.\n"
-    "Keep each entry under 100 chars. Skip trivial observations.\n"
-    "Output ONLY the lines, no headers or explanation.";
-
-static const char *MERGE_SYSTEM =
-    "You are a memory consolidation engine. Merge the NEW memories into the "
-    "EXISTING memory file.\n\n"
-    "Rules:\n"
-    "1. Remove duplicates (same knowledge, different wording)\n"
-    "2. Update outdated entries with newer info\n"
-    "3. Group by category using ## headers:\n"
-    "   ## Patterns\n"
-    "   ## Preferences\n"
-    "   ## Architecture\n"
-    "   ## Bugs\n"
-    "   ## Workflows\n"
-    "   ## Facts\n"
-    "4. Each entry is one line: - knowledge\n"
-    "5. Keep entries concise (under 100 chars each)\n"
-    "6. Empty categories can be omitted\n"
-    "7. Output ONLY the markdown, no explanation";
-
-/* Build observations text for LLM */
-static char *build_observations_text(void) {
-    size_t cap = 4096;
-    size_t len = 0;
-    char *buf = xmalloc(cap);
-    buf[0] = '\0';
-
-    for (int i = 0; i < obs_count; i++) {
-        const char *type_str = memory_type_str(obs_buf[i].type);
-        size_t need = strlen(type_str) + strlen(obs_buf[i].content) + 16;
-        while (len + need > cap) { cap *= 2; buf = xrealloc(buf, cap); }
-        int n = snprintf(buf + len, cap - len, "- [%s] %s\n",
-                         type_str, obs_buf[i].content);
-        if (n > 0) len += (size_t)n;
-    }
-    return buf;
-}
-
-/* Call LLM with a single user message, return resp.content */
-static int llm_extract(const char *system_prompt, const char *user_text,
-                       char **out_content, char *err, size_t err_cap) {
-    MessageList ml;
-    msg_list_init(&ml);
-    msg_list_push(&ml, msg_user_json(user_text));
-
-    LLMResponse resp;
-    memset(&resp, 0, sizeof(resp));
-    int rc = llm_chat(&ml, system_prompt, g_config.model, &resp, err, err_cap);
-    msg_list_free(&ml);
-
-    if (rc != 0)
-        return -1;
-
-    if (!resp.content || !resp.content[0]) {
-        llm_response_free(&resp);
-        return -1;
-    }
-
-    *out_content = resp.content;
-    resp.content = NULL; /* steal ownership */
-    llm_response_free(&resp);
-    return 0;
-}
-
-/* ── Consolidation: short-term → long-term ───────────────────────── */
+/* ── Consolidation ─────────────────────────────────────────────────
+ *
+ * Automatic two-call LLM consolidation is intentionally disabled. The next
+ * iteration should use a restricted memory subagent that edits .agent/memory/.
+ */
 
 int memory_consolidate(char *err, size_t err_cap) {
-    if (obs_count == 0)
-        return 0;
-
-    /* Step 1: observations → new memories */
-    char *obs_text = build_observations_text();
-    char *new_memories = NULL;
-
-    fprintf(stderr, "[memory] consolidating %d observations...\n", obs_count);
-
-    if (llm_extract(EXTRACT_SYSTEM, obs_text, &new_memories, err, err_cap) < 0) {
-        fprintf(stderr, "[memory] extraction failed: %s\n", err);
-        free(obs_text);
-        return -1;
-    }
-    free(obs_text);
-
-    if (!new_memories || !new_memories[0]) {
-        fprintf(stderr, "[memory] extraction returned empty, skipping merge\n");
-        obs_clear();
-        return 0;
-    }
-
-    fprintf(stderr, "[memory] extracted:\n%s\n", new_memories);
-
-    /* Step 2: new memories + existing memory.md → merged */
-    char *existing = memory_recall();
-    char *merge_input;
-    if (existing && existing[0]) {
-        merge_input = xasprintf("## EXISTING memories:\n%s\n\n## NEW memories:\n%s",
-                                existing, new_memories);
-    } else {
-        merge_input = xasprintf("## NEW memories:\n%s", new_memories);
-    }
-    free(existing);
-    free(new_memories);
-
-    char *merged = NULL;
-    if (llm_extract(MERGE_SYSTEM, merge_input, &merged, err, err_cap) < 0) {
-        fprintf(stderr, "[memory] merge failed: %s\n", err);
-        free(merge_input);
-        return -1;
-    }
-    free(merge_input);
-
-    /* Guard: don't overwrite memory.md with empty content */
-    if (!merged || !merged[0]) {
-        fprintf(stderr, "[memory] merge returned empty, keeping existing memory.md\n");
-        free(merged);
-        return 0;
-    }
-
-    /* Write merged result to memory.md */
-    char path[PATH_MAX];
-    memory_path(path, sizeof(path));
-    FILE *f = fopen(path, "w");
-    if (!f) {
-        snprintf(err, err_cap, "cannot write memory.md");
-        free(merged);
-        return -1;
-    }
-    fprintf(f, "%s\n", merged);
-    fflush(f);
-    fclose(f);
-    free(merged);
-
-    /* Clear observations */
+    (void)err;
+    (void)err_cap;
     obs_clear();
-
-    fprintf(stderr, "[memory] consolidation complete\n");
     return 0;
 }
 
 /* ── System prompt injection ─────────────────────────────────────── */
 
 char *memory_build_prompt(void) {
-    char *text = memory_recall();
-    if (!text || !text[0]) {
-        free(text);
+    size_t cap = 4096, len = 0;
+    char *buf = xmalloc(cap);
+    buf[0] = '\0';
+
+    const MemoryType prompt_types[] = {MEM_PREFERENCE, MEM_FACT};
+    bool any = false;
+    for (size_t i = 0; i < sizeof(prompt_types) / sizeof(prompt_types[0]); i++) {
+        MemoryType type = prompt_types[i];
+        char **entries = NULL;
+        int count = read_entries_for_type(type, &entries);
+        if (count > 0) {
+            append_fmt(&buf, &len, &cap, "## %s\n", type_info(type)->title);
+            for (int j = 0; j < count; j++)
+                append_fmt(&buf, &len, &cap, "- %s\n", entries[j]);
+            append_str(&buf, &len, &cap, "\n");
+            any = true;
+        }
+        free_entries(entries, count);
+    }
+
+    if (!any) {
+        free(buf);
         return xstrdup("");
     }
-    return text;
+    return buf;
 }

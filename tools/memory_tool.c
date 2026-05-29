@@ -1,8 +1,8 @@
 /*
  * memory_tool.c — remember and recall tools for the LLM.
  *
- * remember: write knowledge to .agent/memory.md
- * recall:   read .agent/memory.md and return its content
+ * remember: write knowledge to .agent/memory/<type>.md
+ * recall:   read typed project memory and return matching entries
  */
 #include "tools/tools.h"
 #include "memory.h"
@@ -155,7 +155,7 @@ static ToolResult tool_memory_update(cJSON *args) {
 ToolDef remember_tool_def = {
     .name = "remember",
     .desc = "Store important information into persistent project memory. "
-            "The memory is saved to .agent/memory.md and persists across sessions. "
+            "The memory is saved under .agent/memory/ and persists across sessions. "
             "Use this to remember: project architecture, coding conventions, "
             "user preferences, past decisions, build commands, key file locations, "
             "or anything worth knowing in future sessions.",
@@ -174,7 +174,7 @@ ToolDef remember_tool_def = {
 
 ToolDef recall_tool_def = {
     .name = "recall",
-    .desc = "Read the project memory file with optional filtering. "
+    .desc = "Read typed project memory with optional filtering. "
             "Returns entries with [index] prefixes for use with memory_delete/memory_update. "
             "Without filters, returns all entries. With filters, returns matching entries only.",
     .param_schema =
