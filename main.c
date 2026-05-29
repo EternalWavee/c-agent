@@ -4,6 +4,7 @@
 #include "config.h"
 #include "memory.h"
 #include "session.h"
+#include "skills.h"
 #include "ui/ui.h"
 
 #include <stdio.h>
@@ -16,6 +17,7 @@
 int main(void) {
   config_init();
   memory_init();
+  skills_init();
   tools_init();
   Agent *a = agent_create();
   if (!a) {

@@ -11,37 +11,19 @@
 #include "config.h"
 #include "context/context.h"
 #include "llm_client.h"
+#include "prompt.h"
 #include "memory.h"
 #include "message.h"
 #include "tools/tools.h"
 #include "tools/executor.h"
-#include "util.h"
 #include "ui/ui.h"
+#include "util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #define MAX_TURNS 20
-
-static const char AGENT_SYSTEM_TEMPLATE[] =
-    "You are a coding agent running in the CLI at %s.\n"
-    "Use the provided tools when you need to run shell commands.\n"
-    "Return a short, final text reply when the task is done.\n\n"
-    "Memory:\n"
-    "- Use the recall tool at the start of a task to check what you already know about this project.\n"
-    "- Use the remember tool to store important findings: architecture decisions, build commands,\n"
-    "  key file locations, coding conventions, user preferences, or anything worth knowing later.\n"
-    "- Good memory entries are specific and concise. Example: 'Project uses cJSON for JSON parsing, source in libs/cJSON.c'\n"
-    "- Memory persists across sessions. What you remember now will help you in future conversations.\n\n"
-    "SubAgent:\n"
-    "- Use subagent_spawn to start child agents in the background for independent subtasks.\n"
-    "- Use subagent_status to check what subagents are running.\n"
-    "- Use subagent_wait to get a subagent's result when it's done.\n"
-    "- The child has its own context and runs autonomously — intermediate output stays out of your context.\n"
-    "- Good use cases: exploring a codebase, running multiple checks, searching for patterns.\n"
-    "- You can spawn multiple subagents for parallel work, then collect results.";
 
 /* Thread-local flag: true when a subagent is running to suppress UI */
 __thread bool g_agent_silent = false;
@@ -59,22 +41,7 @@ static Agent *agent_create_internal(bool silent) {
     return NULL;
   a->silent = silent;
 
-  char time_buf[64];
-  time_t now = time(NULL);
-  struct tm *tm_now = localtime(&now);
-  strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S %Z", tm_now);
-
-  char *base_prompt = xasprintf(AGENT_SYSTEM_TEMPLATE, g_config.workdir);
-  char *ts_prompt = xasprintf("%s\n\n## Current Time\nCurrent system time: %s\n", base_prompt, time_buf);
-  free(base_prompt);
-
-  char *mem_text = memory_build_prompt();
-  if (mem_text && mem_text[0])
-    a->system_prompt = xasprintf("%s\n## Project Memory\n%s", ts_prompt, mem_text);
-  else
-    a->system_prompt = xstrdup(ts_prompt);
-  free(ts_prompt);
-  free(mem_text);
+  a->system_prompt = agent_build_system_prompt();
 
   a->ctx = ctx_create(g_config.context_window);
   ctx_add_policy(a->ctx, &offload_policy);
@@ -117,6 +84,7 @@ const char *agent_chat(Agent *a, const char *user_input) {
   if (!a->silent) ui_begin_thinking();
   if (llm_chat((MessageList *)ctx_history(a->ctx), a->system_prompt,
                g_config.model, &resp, err, sizeof(err)) < 0) {
+    if (!a->silent) ui_idle();
     fprintf(stderr, "LLM error: %s\n", err);
     return NULL;
   }
@@ -164,6 +132,7 @@ const char *agent_chat(Agent *a, const char *user_input) {
     if (!a->silent) ui_begin_thinking();
     if (llm_chat((MessageList *)ctx_history(a->ctx), a->system_prompt,
                  g_config.model, &resp, err, sizeof(err)) < 0) {
+      if (!a->silent) ui_idle();
       fprintf(stderr, "llm_chat failed: %s\n", err);
       return NULL;
     }

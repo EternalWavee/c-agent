@@ -19,6 +19,7 @@ extern ToolDef subagent_wait_def;
 extern ToolDef memory_delete_def;
 extern ToolDef memory_update_def;
 extern ToolDef current_time_def;
+extern ToolDef load_skill_def;
 
 void tools_init(void) {
     tool_register(&bash_def);
@@ -33,4 +34,5 @@ void tools_init(void) {
     tool_register(&memory_delete_def);
     tool_register(&memory_update_def);
     tool_register(&current_time_def);
+    tool_register(&load_skill_def);
 }

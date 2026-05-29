@@ -34,7 +34,7 @@ TOOL_SRCS  := $(sort $(wildcard tools/*.c))
 UI_SRCS    := $(sort $(wildcard ui/*.c))
 CTX_SRCS   := $(sort $(wildcard context/*.c))
 
-CORE_SRCS  := main.c cmd.c session.c memory.c config.c message.c util.c http.c \
+CORE_SRCS  := main.c cmd.c session.c memory.c skills.c config.c message.c util.c http.c \
               $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS) $(CTX_SRCS)
 
 SRCS := $(CORE_SRCS) $(EXTRA_SRCS)

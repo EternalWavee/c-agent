@@ -52,11 +52,20 @@ static int summary_apply(Context *ctx, char *err, size_t err_cap) {
 
     LLMResponse resp;
     memset(&resp, 0, sizeof(resp));
-    const char *system = "You are a conversation summarizer. "
-        "Summarize the following conversation into a concise handoff message. "
-        "Preserve: key facts, decisions, outcomes, user identity and preferences, "
-        "project context, and any unresolved tasks. "
-        "Write as if the next assistant will read this and continue the conversation seamlessly.";
+    const char *system =
+        "You are a conversation handoff engine for a coding agent. "
+        "Compress the prior conversation into a structured handoff that the next assistant can rely on. "
+        "Do not include generic commentary. Preserve concrete state only. "
+        "If an offloaded tool output marker appears, preserve its id/path and explain when it must be recovered. "
+        "Use exactly these markdown sections when applicable:\n"
+        "## Goal\n"
+        "## Completed\n"
+        "## Current State\n"
+        "## Key Files\n"
+        "## Decisions\n"
+        "## Offloaded References\n"
+        "## Open Questions\n"
+        "## Next Steps\n";
 
     int rc = llm_chat(&prefix, system, g_config.model, &resp, err, err_cap);
     msg_list_free(&prefix);
@@ -70,9 +79,14 @@ static int summary_apply(Context *ctx, char *err, size_t err_cap) {
     }
 
     /* 构造 summary 消息，role 为 user */
+    char *handoff = xasprintf(
+        "[CONTEXT SUMMARY - prior conversation compressed]\n%s",
+        resp.content);
+
     cJSON *summary_msg = cJSON_CreateObject();
     cJSON_AddStringToObject(summary_msg, "role", "user");
-    cJSON_AddStringToObject(summary_msg, "content", resp.content);
+    cJSON_AddStringToObject(summary_msg, "content", handoff);
+    free(handoff);
     char *summary_json = cJSON_PrintUnformatted(summary_msg);
     cJSON_Delete(summary_msg);
 

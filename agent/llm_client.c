@@ -177,6 +177,7 @@ int llm_chat(const MessageList *messages, const char *system_prompt,
   int status;
   const char *body_start;
   if(http_parse_response(response,&status,&body_start)<0){
+    snprintf(err, err_cap, "Failed to parse HTTP response");
     free(response);
     return -1;
   }
