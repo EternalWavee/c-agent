@@ -40,6 +40,22 @@ static void session_file(char *buf, size_t cap,
     snprintf(buf, cap, "%s/%s", dir, filename);
 }
 
+
+static void remove_session_dir_files(const char *id) {
+    char dir[PATH_MAX];
+    session_dir(dir, sizeof(dir), id);
+
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/meta.json", dir);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/checkpoint.json", dir);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/log.jsonl", dir);
+    remove(path);
+
+    rmdir(dir);
+}
+
 /* ── Timestamp helpers ───────────────────────────────────────────── */
 
 static void make_timestamp(char *buf, size_t cap, const char *fmt) {
@@ -433,9 +449,12 @@ int session_startup_recovery(Agent *a) {
 }
 
 int session_new(Agent *a) {
-    /* Save current session if it has content */
-    if (current_session_id[0] != '\0' && agent_history_count(a) > 0)
-        session_checkpoint(a);
+    if (current_session_id[0] != '\0') {
+        if (agent_history_count(a) > 0)
+            session_checkpoint(a);
+        else
+            remove_session_dir_files(current_session_id);
+    }
 
     char id[SESSION_ID_LEN];
     make_session_id(id, sizeof(id));
@@ -572,9 +591,12 @@ int session_restore(const char *session_id, Agent *a) {
     if (stat(dir, &st) != 0 || !S_ISDIR(st.st_mode))
         return -1;
 
-    /* Checkpoint current session */
-    if (current_session_id[0] != '\0')
-        session_checkpoint(a);
+    if (current_session_id[0] != '\0') {
+        if (agent_history_count(a) > 0)
+            session_checkpoint(a);
+        else
+            remove_session_dir_files(current_session_id);
+    }
 
     /* Load target session */
     if (load_session_into_agent(session_id, a) < 0)
@@ -598,14 +620,7 @@ void session_shutdown(Agent *a) {
         if (agent_history_count(a) > 0) {
             session_checkpoint(a);
         } else {
-            /* No messages — remove empty session directory */
-            char dir[PATH_MAX];
-            session_dir(dir, sizeof(dir), current_session_id);
-            char path[PATH_MAX];
-            snprintf(path, sizeof(path), "%s/meta.json", dir);    remove(path);
-            snprintf(path, sizeof(path), "%s/checkpoint.json", dir); remove(path);
-            snprintf(path, sizeof(path), "%s/log.jsonl", dir);    remove(path);
-            rmdir(dir);
+            remove_session_dir_files(current_session_id);
         }
     }
 
@@ -671,6 +686,25 @@ static int cmp_entry_desc(const void *a, const void *b) {
     return strcmp(eb->updated, ea->updated);
 }
 
+static long file_size_or_zero(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISREG(st.st_mode))
+        return (long)st.st_size;
+    return 0;
+}
+
+static long session_storage_size(const char *id) {
+    char path[PATH_MAX];
+    long total = 0;
+    session_file(path, sizeof(path), id, "meta.json");
+    total += file_size_or_zero(path);
+    session_file(path, sizeof(path), id, "checkpoint.json");
+    total += file_size_or_zero(path);
+    session_file(path, sizeof(path), id, "log.jsonl");
+    total += file_size_or_zero(path);
+    return total;
+}
+
 int session_list(SessionEntry **out) {
     char base[PATH_MAX];
     session_base_dir(base, sizeof(base));
@@ -688,6 +722,7 @@ int session_list(SessionEntry **out) {
 
         SessionMeta meta;
         if (meta_read(ent->d_name, &meta) != 0) continue;
+        if (meta.message_count <= 0) continue;
 
         if (count >= cap) {
             cap *= 2;
@@ -701,6 +736,7 @@ int session_list(SessionEntry **out) {
         snprintf(e->created, sizeof(e->created), "%s", meta.created);
         snprintf(e->updated, sizeof(e->updated), "%s", meta.updated);
         e->message_count = meta.message_count;
+        e->size_bytes = session_storage_size(ent->d_name);
 
         get_preview(ent->d_name, e->preview, sizeof(e->preview));
     }

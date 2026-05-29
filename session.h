@@ -27,6 +27,7 @@ typedef struct {
     char created[32];
     char updated[32];
     int  message_count;
+    long size_bytes;
     char preview[256];
 } SessionEntry;
 
