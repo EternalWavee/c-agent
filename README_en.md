@@ -21,7 +21,7 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 ## Highlights
 
 - **ReAct loop** — multi-turn reasoning with tool calling until task completion
-- **13 built-in tools** — `bash`, `read_file`, `write_file`, `edit_file`, `remember`, `recall`, `memory_delete`, `memory_update`, `subagent_spawn`, `subagent_status`, `subagent_wait`, `current_time`, `load_skill`
+- **16 built-in tools** — `bash`, `read_file`, `write_file`, `edit_file`, `remember`, `recall`, `memory_delete`, `memory_update`, `subagent_spawn`, `subagent_status`, `subagent_wait`, `current_time`, `load_skill`, `web_fetch`, `web_search`, `install_skill`
 - **Parallel execution** — read-only tools dispatched concurrently via pthreads
 - **Context management** — automatic offload (session-scoped files + manifest) and structured summary handoff
 - **Session persistence** — append-only log + checkpoint architecture with crash recovery, auto-naming, and interactive session management
@@ -127,7 +127,10 @@ caddy reverse-proxy --from :18080 --to https://models.sjtu.edu.cn --change-host-
 | `subagent_status` | List all subagents and their status | Yes |
 | `subagent_wait` | Wait for a subagent to finish and get its result | No |
 | `current_time` | Get the current system time | Yes |
-| `load_skill` | Load full `.agent/skills/<name>/SKILL.md` instructions | Yes |
+| `load_skill` | Load full project/user `SKILL.md` instructions | Yes |
+| `web_fetch` | Fetch external `http/https` URLs; blocks localhost/private networks | Yes |
+| `web_search` | Search Bing RSS results and return title, URL, and snippet candidates | Yes |
+| `install_skill` | Install a skill package from local dir, git repo, or GitHub tree URL | No |
 
 Read-only tools are automatically dispatched in parallel. State-changing tools run serially.
 
@@ -177,6 +180,16 @@ Each session is stored as a directory under `.agent/sessions/<id>/`:
 
 ---
 
+## Web Access
+
+`web_fetch` provides minimal web access for explicit `http/https` URLs. It follows redirects, enforces timeout/size limits, and blocks localhost/private-network hosts. It is intended for official docs, remote `SKILL.md` files, GitHub raw files, and similar resources.
+
+`web_search` provides simple search by requesting Bing `format=rss` search results and parsing the first items. It does not use the Bing API; if RSS parsing fails, try a different query or use a known URL.
+
+`install_skill` installs skill packages from local directories, git repo URLs, or GitHub tree URLs. It only copies a directory containing `SKILL.md`; it does not execute `scripts/`. Existing skills are not overwritten unless `force=true`.
+
+---
+
 ## Skill System
 
 Skills provide task-specific instructions on demand, without stuffing every long prompt into the system prompt. Package layout:
@@ -198,7 +211,7 @@ description: Use when analyzing benchmarks, datasets, metrics, baselines, or rel
 allowed-tools: Read, Write, Edit, Bash, WebFetch, Grep, Glob
 ```
 
-When a skill is relevant, the agent calls `load_skill {"name":"..."}` to read the full `SKILL.md`. `scripts/`, `references/`, and `assets/` are supported as ordinary package directories in the first version; scripts still run through the existing `bash` tool, with no dedicated `run_skill_script` yet.
+When a skill is relevant, the agent calls `load_skill {"name":"..."}` to read the full `SKILL.md`. Users can also ask the agent to use `install_skill` to install a package from a local directory, git repo, or GitHub tree URL. The default target is project scope `.agent/skills/`; `scope=user` installs to `~/.c-agent/skills/`. `scripts/`, `references/`, and `assets/` are supported as ordinary package directories in the first version; scripts still run through the existing `bash` tool, with no dedicated `run_skill_script` yet.
 
 ---
 
@@ -240,7 +253,9 @@ If a legacy `.agent/memory.md` exists, entries in `- [type] content` format are 
 | `fact` | General facts | "Project is CS2313 course design" |
 
 **Write paths:**
-- The agent actively calls the `remember` tool for important findings
+- The agent proactively calls `remember`; it should not wait for the user to explicitly say "remember this"
+- It should remember stable user facts, long-term preferences, fixed project workflows, architecture decisions, repeated bugs/fixes, and explicit corrections
+- It should not remember one-off command output, temporary errors, unverified search results, transient plans, or jokes unless the user confirms they matter
 - `/memory` asks the agent to review the current conversation and call `remember` once per durable item
 - Users may manually edit `.agent/memory/*.md`
 
@@ -345,7 +360,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 
 **Potential improvements:**
 
-- **Richer tool ecosystem** — add tools like `grep`, `find`, `git`, `web_fetch`, `code_search` to handle more complex workflows
+- **Richer tool ecosystem** — add tools like `grep`, `find`, `git`, `web_fetch`, `web_search`, `code_search` to handle more complex workflows
 - **Streaming output** — display LLM responses token-by-token for better perceived latency
 - **Plugin architecture** — allow users to register custom tools at runtime via shared libraries or config files
 - **Smarter context policies** — use actual tokenizers (tiktoken) and implement priority-based eviction (e.g. keep high-value tool results, drop low-info chat)

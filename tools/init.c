@@ -20,6 +20,9 @@ extern ToolDef memory_delete_def;
 extern ToolDef memory_update_def;
 extern ToolDef current_time_def;
 extern ToolDef load_skill_def;
+extern ToolDef install_skill_def;
+extern ToolDef web_fetch_def;
+extern ToolDef web_search_def;
 
 void tools_init(void) {
     tool_register(&bash_def);
@@ -35,4 +38,7 @@ void tools_init(void) {
     tool_register(&memory_update_def);
     tool_register(&current_time_def);
     tool_register(&load_skill_def);
+    tool_register(&web_fetch_def);
+    tool_register(&web_search_def);
+    tool_register(&install_skill_def);
 }
