@@ -9,7 +9,7 @@
 
 <p align="center">
   A lightweight, terminal-based coding agent written in pure C.<br/>
-  <a href="README_zh.md">中文文档</a>
+  <a href="README.md">中文文档</a>
 </p>
 
 C Agent is a terminal-based coding assistant powered by LLM tool-calling. Users describe tasks in natural language, and the agent autonomously invokes tools — running shell commands, reading and writing files, editing code — to complete them. Built with a ReAct reasoning loop, parallel read-only execution, automatic context management (offload + summary), and workspace sandbox isolation.
@@ -21,11 +21,11 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 ## Highlights
 
 - **ReAct loop** — multi-turn reasoning with tool calling until task completion
-- **11 built-in tools** — `bash`, `read_file`, `write_file`, `edit_file`, `remember`, `recall`, `memory_delete`, `memory_update`, `subagent_spawn`, `subagent_status`, `subagent_wait`
+- **13 built-in tools** — `bash`, `read_file`, `write_file`, `edit_file`, `remember`, `recall`, `memory_delete`, `memory_update`, `subagent_spawn`, `subagent_status`, `subagent_wait`, `current_time`, `load_skill`
 - **Parallel execution** — read-only tools dispatched concurrently via pthreads
-- **Context management** — automatic offload (large outputs to disk) and summary (LLM-based compression)
+- **Context management** — automatic offload (session-scoped files + manifest) and structured summary handoff
 - **Session persistence** — append-only log + checkpoint architecture with crash recovery, auto-naming, and interactive session management
-- **Project memory** — LLM-driven persistent knowledge store (`.agent/memory.md`), the agent learns and remembers across sessions
+- **Project memory** — `.agent/memory/` index plus six typed files for persistent project knowledge
 - **Sandbox safety** — all file paths confined to the workspace directory
 - **Dangerous command filter** — blocks destructive shell patterns before execution
 - **Terminal UI** — real-time spinner and per-tool status display
@@ -34,16 +34,49 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 
 ## Quick Start
 
+Requirements: C compiler, `make`, POSIX shell, and `caddy`. `start.sh` starts a local proxy to the SJTU model service.
+
+### Linux
+
 ```bash
+sudo apt install -y build-essential make caddy
 export API_KEY="sjtu-api-key"
 ./start.sh
+```
+
+### macOS
+
+```bash
+xcode-select --install
+brew install caddy
+export API_KEY="sjtu-api-key"
+./start.sh
+```
+
+### Windows
+
+Native Windows builds are not supported. Use WSL2:
+
+```powershell
+wsl --install
+```
+
+Then follow the Linux steps inside WSL.
+
+Manual startup:
+
+```bash
+make
+caddy reverse-proxy --from :18080 --to https://models.sjtu.edu.cn --change-host-header
+# In another terminal
+./build/c-agent
 ```
 
 ---
 
 ## Milestone
 
-> 🚀 **2026.05.27** — c-agent takes shape with full tool-calling, memory management, and autonomous coding capabilities. Built on our C framework, powered by DeepSeek provided by Shanghai Jiao Tong University, this iteration was completed entirely through natural language instructions. [commit](https://github.com/EternalWavee/c-agent/commit/2b2475aadaeb43fde3a1b946ea977ec38496a56c)
+> 🚀 **2026.05.27** — c-agent takes shape with full tool-calling, memory management, and autonomous coding capabilities. Built on our C framework, powered by DeepSeek provided by Shanghai Jiao Tong University, [this iteration](https://github.com/EternalWavee/c-agent/commit/2b2475aadaeb43fde3a1b946ea977ec38496a56c) was completed entirely through natural language instructions.
 
 ---
 
@@ -72,7 +105,7 @@ export API_KEY="sjtu-api-key"
 | `/session name X` | Rename current session |
 | `/session delete X` | Delete a session |
 | `/session restore X` | Restore a session by id |
-| `/memory` | Trigger LLM to summarize and save what it learned |
+| `/memory` | Ask the agent to call `remember` for important knowledge learned in the current conversation |
 | `/help` | Show available commands |
 | `exit` / `quit` / `q` | Exit |
 
@@ -93,6 +126,8 @@ export API_KEY="sjtu-api-key"
 | `subagent_spawn` | Spawn a background child agent for independent subtasks | No |
 | `subagent_status` | List all subagents and their status | Yes |
 | `subagent_wait` | Wait for a subagent to finish and get its result | No |
+| `current_time` | Get the current system time | Yes |
+| `load_skill` | Load full `.agent/skills/<name>/SKILL.md` instructions | Yes |
 
 Read-only tools are automatically dispatched in parallel. State-changing tools run serially.
 
@@ -100,12 +135,25 @@ Read-only tools are automatically dispatched in parallel. State-changing tools r
 
 ## Context Management
 
-When the conversation grows too large, two policies reclaim space automatically:
+When the conversation grows too large, two policies reclaim space before each LLM request:
 
-1. **Offload** — moves large tool outputs to `.agent/offload/`, replacing them with compact placeholders that the LLM can use to recover the data via `read_file`
-2. **Summary** — compresses older conversation history into a single summary message using the LLM itself
+1. **Offload** — moves large tool outputs to `.agent/offload/` and replaces the original tool message with a short preview plus a structured recovery reference. Interactive sessions are isolated by session id: `.agent/offload/<session_id>/<n>.txt`; non-interactive/test runs keep the legacy `.agent/offload/<n>.txt` layout.
+2. **Summary** — asks the LLM to compress older conversation history into a structured handoff message while preserving recent raw messages. The handoff keeps sections such as `Goal`, `Completed`, `Current State`, `Key Files`, `Decisions`, `Offloaded References`, `Open Questions`, and `Next Steps`.
 
-Both are triggered by token budget thresholds and run before each LLM request.
+An offloaded tool message looks like:
+
+```text
+[OFFLOADED_TOOL_OUTPUT]
+id: 0
+path: .agent/offload/<session_id>/0.txt
+size_bytes: ...
+manifest: .agent/offload/<session_id>/MANIFEST.md
+recovery: call read_file ...
+```
+
+Each offload directory also has a `MANIFEST.md` recording the source tool, arguments, size, and preview for every offloaded file. The system prompt tells the agent to call `read_file` before relying on omitted content, instead of guessing from the preview.
+
+Offload runs before summary. If offload reduces usage below the summary threshold, summary is skipped.
 
 ---
 
@@ -129,17 +177,56 @@ Each session is stored as a directory under `.agent/sessions/<id>/`:
 
 ---
 
+## Skill System
+
+Skills provide task-specific instructions on demand, without stuffing every long prompt into the system prompt. Package layout:
+
+```text
+Project: .agent/skills/<skill-name>/
+User: ~/.c-agent/skills/<skill-name>/
+  SKILL.md          # required skill entrypoint
+  scripts/          # optional helper scripts
+  references/       # optional reference docs
+  assets/           # optional templates/resources
+```
+
+On startup, the agent scans `SKILL.md` metadata from project-level `.agent/skills/` and user-level `~/.c-agent/skills/`, then builds a compact skill manifest. Project skills override user skills with the same name. Frontmatter, markdown tables, and simple `key value` metadata are supported. Common fields:
+
+```text
+name: benchmark-research-skill
+description: Use when analyzing benchmarks, datasets, metrics, baselines, or related work.
+allowed-tools: Read, Write, Edit, Bash, WebFetch, Grep, Glob
+```
+
+When a skill is relevant, the agent calls `load_skill {"name":"..."}` to read the full `SKILL.md`. `scripts/`, `references/`, and `assets/` are supported as ordinary package directories in the first version; scripts still run through the existing `bash` tool, with no dedicated `run_skill_script` yet.
+
+---
+
 ## Memory System
 
-Inspired by the agentmemory architecture, the agent maintains a persistent memory file at `.agent/memory.md` with a short-term → long-term consolidation pipeline.
+The agent maintains persistent project knowledge under `.agent/memory/`. Storage is split into an index plus six typed files:
+
+```text
+.agent/memory/
+  MEMORY.md          # index of memory files
+  pattern.md         # code patterns / conventions
+  preference.md      # user preferences
+  architecture.md    # architecture knowledge
+  bug.md             # known issues
+  workflow.md        # build/test/run workflows
+  fact.md            # stable facts
+```
 
 **How it works:**
 
+```text
+On startup:  preference.md + fact.md → system prompt, so the agent remembers identity, preferences, and stable facts
+During work: recall can query the full memory store by keyword/type
+On write:    remember writes to the matching typed file and deduplicates exact entries
+Maintenance: memory_delete/memory_update operate on global indices returned by recall
 ```
-During session: tool calls → auto-capture into short-term buffer (in-memory)
-On shutdown:    short-term → LLM#1 extract → LLM#2 merge with existing → memory.md
-On startup:     memory.md → injected into system prompt → agent "remembers"
-```
+
+If a legacy `.agent/memory.md` exists, entries in `- [type] content` format are migrated into the new directory structure on startup. The old two-step LLM consolidation on shutdown is disabled; future memory compaction should be handled by a restricted memory subagent that edits `.agent/memory/` directly.
 
 **Memory types** (6 categories):
 
@@ -152,19 +239,14 @@ On startup:     memory.md → injected into system prompt → agent "remembers"
 | `workflow` | Build / test workflows | "Build with make, test with make test" |
 | `fact` | General facts | "Project is CS2313 course design" |
 
-**Two-step consolidation** (runs on session shutdown):
-
-1. **LLM#1 Extract** — compress raw tool observations into structured knowledge entries
-2. **LLM#2 Merge** — merge new entries with existing memory.md, deduplicate, organize by category
-
 **Write paths:**
-- Auto-capture from tool calls (`write_file`, `edit_file`, `bash`, `read_file`)
-- LLM actively calls `remember` tool
-- User manually edits `.agent/memory.md`
+- The agent actively calls the `remember` tool for important findings
+- `/memory` asks the agent to review the current conversation and call `remember` once per durable item
+- Users may manually edit `.agent/memory/*.md`
 
 **Read paths:**
-- System prompt injection (automatic on startup)
-- LLM calls `recall` tool (supports `keyword` and `type` filters)
+- Startup injects only `preference` and `fact` entries, avoiding full memory bloat in the system prompt
+- The agent calls `recall` for the full memory store (supports `keyword` and `type` filters)
 
 **Modify / Delete:**
 - `recall` returns entries with `[index]` prefixes
@@ -190,16 +272,18 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 .
 ├── main.c                  # Entry point and REPL
 ├── session.c               # Session persistence (log + checkpoint)
-├── memory.c                # Project memory (.agent/memory.md)
+├── memory.c                # Project memory (.agent/memory/ index + typed files)
+├── skills.c                # Skill metadata scanning and SKILL.md loading
 ├── cmd.c                   # Slash command dispatch
 ├── config.c                # Environment-based configuration
 ├── agent/
 │   ├── agent.c             # Core conversation loop (ReAct)
+│   ├── prompt.c           # System prompt assembly (rules, time, memory injection)
 │   └── llm_client.c        # HTTP transport + JSON wire format
 ├── context/
 │   ├── context.c           # Context budget and policy engine
-│   ├── policy_offload.c    # Lossless offload to disk
-│   └── policy_summary.c    # Lossy compression via LLM
+│   ├── policy_offload.c    # Lossless offload to disk (session scoped + manifest)
+│   └── policy_summary.c    # Lossy compression via structured LLM handoff
 ├── tools/
 │   ├── registry.c          # Static tool registry
 │   ├── init.c              # Tool registration initialization
@@ -210,6 +294,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 │   ├── write.c             # File writer
 │   ├── edit.c              # Substring replacement
 │   ├── memory_tool.c       # remember + recall + delete + update tools
+│   ├── skill_tool.c        # load_skill tool
 │   └── subagent.c          # Background child agents (spawn/status/wait)
 ├── ui/
 │   ├── ui.c                # Event dispatch
@@ -234,7 +319,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - [x] Context offload (large outputs to disk)
 - [x] Context summary (LLM-based history compression)
 - [x] Session persistence (append-only log + checkpoint, crash recovery, auto-naming)
-- [x] Project memory (LLM-driven persistent knowledge store in .agent/memory.md) with filtering, delete, and update
+- [x] Project memory (.agent/memory/ index + six typed files) with filtering, delete, and update
 - [x] Terminal UI with spinner and per-tool status
 - [x] SubAgent (background child agents for parallel independent subtasks)
 
@@ -244,7 +329,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - [x] **SubAgent** — spawn child agents for independent subtasks
 - [x] **Memory** — project-level knowledge persistence across sessions, with filtering, delete, and update
 - [x] **SubAgent** — background child agents for parallel independent subtasks
-- [ ] **Skill system** — on-demand prompt injection for specialized tasks
+- [x] **Skill system** — scans `.agent/skills/<name>/SKILL.md` metadata and loads full instructions with `load_skill`
 
 ---
 
@@ -252,7 +337,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 
 **Current limitations:**
 
-- **Limited tool set** — 4 base tools (`bash`, `read_file`, `write_file`, `edit_file`) plus 7 extended tools (memory management, sub-agents). Still missing common capabilities like web search, codebase indexing, diff viewing, and git operations.
+- **Limited tool set** — 4 base tools (`bash`, `read_file`, `write_file`, `edit_file`) plus 8 extended tools (memory management, sub-agents). Still missing common capabilities like web search, codebase indexing, diff viewing, and git operations.
 - **No streaming** — LLM responses are received in full before display. Long responses feel unresponsive.
 - **Single-model support** — no easy way to switch between different LLM providers or mix models for different tasks.
 - **Basic context heuristics** — the token estimator is a rough character-count heuristic, not a real tokenizer. Budget thresholds may fire too early or too late.
@@ -265,7 +350,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - **Plugin architecture** — allow users to register custom tools at runtime via shared libraries or config files
 - **Smarter context policies** — use actual tokenizers (tiktoken) and implement priority-based eviction (e.g. keep high-value tool results, drop low-info chat)
 - **Multi-agent collaboration** — basic implementation done (`subagent_spawn`/`subagent_status`/`subagent_wait`), supports background parallel subtasks
-- **Persistent memory** — implemented (`remember`/`recall`/`memory_delete`/`memory_update`), supports filtering, deletion, and update
+- **Persistent memory** — implemented (`remember`/`recall`/`memory_delete`/`memory_update`), uses `.agent/memory/` index + typed files and injects only `preference`/`fact` on startup
 
 ---
 
