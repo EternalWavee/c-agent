@@ -15,9 +15,71 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #define LLM_TIMEOUT_SEC 120
+#define LLM_NET_RETRIES 2
+
+
+
+static void sleep_ms(long ms) {
+  struct timespec ts;
+  ts.tv_sec = ms / 1000;
+  ts.tv_nsec = (ms % 1000) * 1000000L;
+  while (nanosleep(&ts, &ts) != 0) {
+  }
+}
+
+static int valid_utf8_seq(const unsigned char *p, int *n) {
+  if (p[0] < 0x80) { *n = 1; return 1; }
+  if ((p[0] & 0xE0) == 0xC0 && p[1] && (p[1] & 0xC0) == 0x80) {
+    *n = 2; return 1;
+  }
+  if ((p[0] & 0xF0) == 0xE0 && p[1] && p[2] &&
+      (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80) {
+    *n = 3; return 1;
+  }
+  if ((p[0] & 0xF8) == 0xF0 && p[1] && p[2] && p[3] &&
+      (p[1] & 0xC0) == 0x80 && (p[2] & 0xC0) == 0x80 &&
+      (p[3] & 0xC0) == 0x80) {
+    *n = 4; return 1;
+  }
+  *n = 1;
+  return 0;
+}
+
+static char *sanitize_utf8_for_json(const char *s) {
+  if (!s)
+    return NULL;
+  size_t len = strlen(s);
+  char *out = xmalloc(len + 1);
+  size_t ri = 0, wi = 0;
+  while (ri < len) {
+    int n = 1;
+    const unsigned char *p = (const unsigned char *)s + ri;
+    if (valid_utf8_seq(p, &n)) {
+      memcpy(out + wi, s + ri, (size_t)n);
+      wi += (size_t)n;
+    } else {
+      out[wi++] = '?';
+    }
+    ri += (size_t)n;
+  }
+  out[wi] = '\0';
+  return out;
+}
+
+static void sanitize_message_content(cJSON *msg) {
+  cJSON *content = cJSON_GetObjectItem(msg, "content");
+  const char *text = cJSON_GetStringValue(content);
+  if (!text)
+    return;
+  char *clean = sanitize_utf8_for_json(text);
+  if (clean && strcmp(clean, text) != 0)
+    cJSON_SetValuestring(content, clean);
+  free(clean);
+}
 
 int llm_chat(const MessageList *messages, const char *system_prompt,
              const char *model, LLMResponse *out, char *err, size_t err_cap) {
@@ -92,6 +154,7 @@ int llm_chat(const MessageList *messages, const char *system_prompt,
   for(int i=0;i<messages->len;i++){
     cJSON *msg = cJSON_Parse(messages->items[i]);
     if(msg){
+      sanitize_message_content(msg);
       cJSON_AddItemToArray(messages_array, msg);
     }
   }
@@ -137,52 +200,81 @@ int llm_chat(const MessageList *messages, const char *system_prompt,
   );
 
 
-  int fd = tcp_connect(g_config.llm_host, g_config.llm_port, err,err_cap);
-  if(fd<0){
-    snprintf(err, err_cap, "Failed to connect to LLM server");
-    free(header);
-    free(body);
-    return -1;
+  char *response = NULL;
+  size_t resp_len = 0;
+  int net_ok = 0;
+
+  for (int attempt = 0; attempt <= LLM_NET_RETRIES; attempt++) {
+    int fd = tcp_connect(g_config.llm_host, g_config.llm_port, err, err_cap);
+    if (fd < 0) {
+      snprintf(err, err_cap, "Failed to connect to LLM server");
+    } else if (send_all(fd, header, strlen(header)) < 0) {
+      snprintf(err, err_cap, "Failed to send request header");
+      close(fd);
+    } else if (send_all(fd, body, body_len) < 0) {
+      snprintf(err, err_cap, "Failed to send request body");
+      close(fd);
+    } else if (recv_all(fd, LLM_TIMEOUT_SEC, &response, &resp_len, err, err_cap) < 0) {
+      close(fd);
+    } else {
+      close(fd);
+      net_ok = 1;
+      break;
+    }
+
+    if (attempt < LLM_NET_RETRIES)
+      sleep_ms(200 * (attempt + 1));
   }
-  if(send_all(fd,header,strlen(header))<0){
-    snprintf(err, err_cap, "Failed to send request header");
+
+  if (!net_ok) {
     free(header);
     free(body);
-    close(fd);
     return -1;
   }
 
-  // fprintf(stderr, "DEBUG: body_len=%zu body=%s\n", body_len, body); 
-  if(send_all(fd,body,body_len)<0){
-    snprintf(err, err_cap, "Failed to send request body");
-    free(header);
-    free(body);
-    close(fd);
-    return -1;
-  }
-  // fprintf(stderr, "DEBUG: body sent, waiting for response...\n"); 
-  char *response = NULL;
-  size_t resp_len = 0;
-  if(recv_all(fd,LLM_TIMEOUT_SEC,&response,&resp_len,err,err_cap)<0){
-    free(header);
-    free(body);
-    close(fd);
-    return -1;
-  }
-  // fprintf(stderr, "DEBUG: response=%.500s\n", response);
-  close(fd);
-  free(header);
-  free(body);
-  
   int status;
   const char *body_start;
   if(http_parse_response(response,&status,&body_start)<0){
     snprintf(err, err_cap, "Failed to parse HTTP response");
+    free(header);
+    free(body);
     free(response);
     return -1;
   }
+
+  for (int attempt = 0; status >= 500 && status < 600 &&
+       attempt < LLM_NET_RETRIES; attempt++) {
+    free(response);
+    response = NULL;
+    resp_len = 0;
+    sleep_ms(500 * (attempt + 1));
+
+    int fd = tcp_connect(g_config.llm_host, g_config.llm_port, err, err_cap);
+    if (fd < 0)
+      break;
+    if (send_all(fd, header, strlen(header)) < 0 ||
+        send_all(fd, body, body_len) < 0 ||
+        recv_all(fd, LLM_TIMEOUT_SEC, &response, &resp_len, err, err_cap) < 0) {
+      close(fd);
+      break;
+    }
+    close(fd);
+
+    if (http_parse_response(response, &status, &body_start) < 0) {
+      snprintf(err, err_cap, "Failed to parse HTTP response");
+      free(header);
+      free(body);
+      free(response);
+      return -1;
+    }
+  }
+
+  free(header);
+  free(body);
+
   if(status!=200){
-    snprintf(err, err_cap, "LLM server returned status %d", status);
+    snprintf(err, err_cap, "LLM server returned status %d: %.500s", status,
+             body_start ? body_start : "");
     free(response);
     return -1;
   }

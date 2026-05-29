@@ -91,8 +91,12 @@ int ctx_reclaim(Context *ctx, char *err, size_t err_cap) {
     if (p->apply(ctx, err, err_cap) != 0)
       return -1;
 
+    int after = ctx_total_tokens(ctx);
     printf("[context] policy \"%s\" complete: %d -> %d tokens\n", p->name,
-           before, ctx_total_tokens(ctx));
+           before, after);
+
+    if (after < before)
+      break;
   }
 
   int total = ctx_total_tokens(ctx);

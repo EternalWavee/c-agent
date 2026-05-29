@@ -12,6 +12,23 @@
 
 extern const char *session_current_id(void) __attribute__((weak));
 
+
+static void sanitize_preview(const char *src, char *dst, size_t cap, size_t max_bytes) {
+    size_t wi = 0;
+    size_t ri = 0;
+    while (src && src[ri] && ri < max_bytes && wi + 1 < cap) {
+        unsigned char c = (unsigned char)src[ri++];
+        if (c == '\n' || c == '\r' || c == '\t') {
+            dst[wi++] = ' ';
+        } else if (c >= 0x20 && c <= 0x7e) {
+            dst[wi++] = (char)c;
+        } else if (wi + 1 < cap) {
+            dst[wi++] = '?';
+        }
+    }
+    dst[wi] = '\0';
+}
+
 static void json_escape_preview(const char *src, char *dst, size_t cap) {
     size_t wi = 0;
     for (size_t ri = 0; src && src[ri] && wi + 1 < cap; ri++) {
@@ -64,6 +81,43 @@ static char *find_tool_source(MessageList *hist, int before_index,
     }
 
     return xasprintf("tool_call_id %s", tool_call_id);
+}
+
+
+static bool is_offload_recovery_read(Context *ctx, int before_index,
+                                     const char *tool_call_id) {
+    if (!tool_call_id || !tool_call_id[0])
+        return false;
+
+    MessageList *hist = (MessageList *)ctx_history(ctx);
+    for (int i = before_index - 1; i >= 0; i--) {
+        cJSON *msg = cJSON_Parse(hist->items[i]);
+        if (!msg)
+            continue;
+        cJSON *calls = cJSON_GetObjectItem(msg, "tool_calls");
+        if (!calls || !cJSON_IsArray(calls)) {
+            cJSON_Delete(msg);
+            continue;
+        }
+
+        int n = cJSON_GetArraySize(calls);
+        for (int j = 0; j < n; j++) {
+            cJSON *call = cJSON_GetArrayItem(calls, j);
+            const char *id = json_str(call, "id");
+            if (!id || strcmp(id, tool_call_id) != 0)
+                continue;
+
+            cJSON *fn = cJSON_GetObjectItem(call, "function");
+            const char *name = fn ? json_str(fn, "name") : NULL;
+            const char *args = fn ? json_str(fn, "arguments") : NULL;
+            bool match = name && strcmp(name, "read_file") == 0 && args &&
+                         strstr(args, ".agent/offload/") != NULL;
+            cJSON_Delete(msg);
+            return match;
+        }
+        cJSON_Delete(msg);
+    }
+    return false;
 }
 
 static int append_manifest_entry(const char *offload_dir, int id,
@@ -122,9 +176,8 @@ static int offload_apply(Context *ctx, char *err, size_t err_cap) {
 
     MessageList *hist = (MessageList *)ctx_history(ctx);
     int total = hist->len;
-    int cutoff = total - KEEP_RECENT_MSGS;
 
-    for (int i = 0; i < cutoff; i++) {
+    for (int i = 0; i < total; i++) {
         cJSON *msg = cJSON_Parse(hist->items[i]);
         if (!msg) continue;
 
@@ -141,6 +194,12 @@ static int offload_apply(Context *ctx, char *err, size_t err_cap) {
         }
 
         if (strstr(content, ".agent/offload/") != NULL) {
+            cJSON_Delete(msg);
+            continue;
+        }
+
+        const char *tcid = json_str(msg, "tool_call_id");
+        if (is_offload_recovery_read(ctx, i, tcid)) {
             cJSON_Delete(msg);
             continue;
         }
@@ -162,12 +221,8 @@ static int offload_apply(Context *ctx, char *err, size_t err_cap) {
         ctx->next_offload_id++;
 
         size_t content_len = strlen(content);
-        size_t preview_len = content_len;
-        if (preview_len > 80)
-            preview_len = 80;
-        char preview[81];
-        memcpy(preview, content, preview_len);
-        preview[preview_len] = '\0';
+        char preview[161];
+        sanitize_preview(content, preview, sizeof(preview), 80);
 
         char *new_content = xasprintf(
             "%s\n"
@@ -182,7 +237,6 @@ static int offload_apply(Context *ctx, char *err, size_t err_cap) {
         cJSON *new_msg = cJSON_CreateObject();
         cJSON_AddStringToObject(new_msg, "role", "tool");
         cJSON_AddStringToObject(new_msg, "content", new_content);
-        const char *tcid = json_str(msg, "tool_call_id");
         if (tcid)
             cJSON_AddStringToObject(new_msg, "tool_call_id", tcid);
 
