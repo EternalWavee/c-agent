@@ -36,11 +36,12 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 
 Requirements: C compiler, `make`, POSIX shell, and `caddy`. `start.sh` starts a local proxy to the SJTU model service.
 
+> First replace `dummy` in the [start.sh](./start.sh) with api_key
+
 ### Linux
 
 ```bash
 sudo apt install -y build-essential make caddy
-export API_KEY="sjtu-api-key"
 ./start.sh
 ```
 
@@ -49,7 +50,6 @@ export API_KEY="sjtu-api-key"
 ```bash
 xcode-select --install
 brew install caddy
-export API_KEY="sjtu-api-key"
 ./start.sh
 ```
 
@@ -67,6 +67,7 @@ Manual startup:
 
 ```bash
 make
+export API_KEY="sjtu-api-key"
 caddy reverse-proxy --from :18080 --to https://models.sjtu.edu.cn --change-host-header
 # In another terminal
 ./build/c-agent
