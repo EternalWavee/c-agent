@@ -109,14 +109,6 @@ const char *agent_chat(Agent *a, const char *user_input) {
       return NULL;
     }
 
-    /* Auto-capture observations for memory */
-    for (int i = 0; i < resp.n_tool_calls; i++) {
-      char *args_str = cJSON_PrintUnformatted(resp.tool_calls[i].args);
-      memory_observe(resp.tool_calls[i].name, args_str,
-                     out_msgs[i] ? out_msgs[i] : "");
-      free(args_str);
-    }
-
     for (int i = 0; i < resp.n_tool_calls; i++)
       ctx_push(a->ctx, out_msgs[i]);
 

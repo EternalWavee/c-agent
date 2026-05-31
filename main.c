@@ -2,6 +2,7 @@
 #include "tools/tools.h"
 #include "cmd.h"
 #include "config.h"
+#include "hooks.h"
 #include "memory.h"
 #include "session.h"
 #include "skills.h"
@@ -20,6 +21,7 @@ int main(void) {
   memory_init();
   skills_init();
   tools_init();
+  hooks_init();
   Agent *a = agent_create();
   if (!a) {
     fprintf(stderr, "agent_create failed\n");

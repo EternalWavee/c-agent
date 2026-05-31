@@ -27,6 +27,7 @@
  */
 #include "tools/executor.h"
 
+#include "hooks.h"
 #include "message.h"
 #include "tools/tools.h"
 #include "ui/ui.h"
@@ -47,6 +48,16 @@ typedef struct {
 } ToolTask;
 
 static void run_one(ToolTask *task) {
+    char *args_json = cJSON_PrintUnformatted(task->call->args);
+    HookToolEvent before = {
+        .call = task->call,
+        .def = task->def,
+        .args_json = args_json ? args_json : "{}",
+        .result = NULL,
+        .index = task->index,
+    };
+    hooks_emit(HOOK_BEFORE_TOOL, &before);
+
     if (task->def) {
         task->result = task->def->exec(task->call->args);
     } else {
@@ -55,6 +66,16 @@ static void run_one(ToolTask *task) {
             .output = xasprintf("unknown tool: %s", task->call->name ? task->call->name : "(null)"),
         };
     }
+    HookToolEvent after = {
+        .call = task->call,
+        .def = task->def,
+        .args_json = args_json ? args_json : "{}",
+        .result = &task->result,
+        .index = task->index,
+    };
+    hooks_emit(HOOK_AFTER_TOOL, &after);
+    free(args_json);
+
     if (!g_agent_silent)
         ui_tool_done(task->index, task->result.ok, task->result.output);
 }
