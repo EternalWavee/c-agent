@@ -7,11 +7,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #define MD_TABLE_MAX_ROWS 64
 #define MD_TABLE_MAX_COLS 12
 #define MD_TABLE_CELL_MAX 256
+#define MD_CODE_LINE_MAX 4096
+#define MD_CODE_TEXT_MAX 32768
 
 typedef enum {
   LINK_NONE,
@@ -30,8 +33,13 @@ typedef struct {
   int table_row;
   int table_cols;
   int table_header_rows;
+  int code_width;
   bool table_row_is_header;
   char code_lang[64];
+  char code_line[MD_CODE_LINE_MAX];
+  char code_text[MD_CODE_TEXT_MAX];
+  size_t code_line_len;
+  size_t code_text_len;
   bool at_line_start;
   bool in_code_block;
   bool code_line_open;
@@ -65,6 +73,13 @@ static void md_esc(const char *code) {
 static void write_text(const char *text, MD_SIZE size) {
   if (size > 0)
     fwrite(text, 1, size, stdout);
+}
+
+static int terminal_columns(void) {
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+    return ws.ws_col;
+  return 80;
 }
 
 static void attr_copy(char *dst, size_t cap, const MD_ATTRIBUTE *attr) {
@@ -115,34 +130,220 @@ static int codepoint_width(uint32_t cp) {
   if (cp == 0 || cp < 32 || (cp >= 0x7f && cp < 0xa0))
     return 0;
   if ((cp >= 0x0300 && cp <= 0x036f) || (cp >= 0xfe00 && cp <= 0xfe0f) ||
-      cp == 0x200d)
+      (cp >= 0x1f3fb && cp <= 0x1f3ff) || cp == 0x200d)
     return 0;
+  if (cp >= 0x1f170 && cp <= 0x1f251)
+    return 1;
   if ((cp >= 0x1100 && cp <= 0x115f) || cp == 0x2329 || cp == 0x232a ||
       (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) ||
       (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe10 && cp <= 0xfe19) ||
       (cp >= 0xfe30 && cp <= 0xfe6f) || (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0x23e9 && cp <= 0x23fa) || cp == 0x24c2 ||
       (cp >= 0x2600 && cp <= 0x27bf) ||
+      (cp >= 0x2b00 && cp <= 0x2bff) || cp == 0x3030 ||
+      cp == 0x303d || cp == 0x3297 || cp == 0x3299 ||
       (cp >= 0x1f300 && cp <= 0x1faff))
     return 2;
   return 1;
 }
 
+static bool is_zero_width_codepoint(uint32_t cp) {
+  return (cp >= 0x0300 && cp <= 0x036f) || (cp >= 0xfe00 && cp <= 0xfe0f) ||
+         (cp >= 0x1f3fb && cp <= 0x1f3ff) || cp == 0x200d;
+}
+
+static bool is_variation_selector_16(uint32_t cp) { return cp == 0xfe0f; }
+
+static size_t cluster_width_at(const char *s, int *width) {
+  uint32_t cp;
+  int n;
+  utf8_decode_one(s, &cp, &n);
+  size_t off = (size_t)n;
+  int w = codepoint_width(cp);
+  bool has_vs16 = false;
+  bool has_zwj = false;
+
+  while (s[off]) {
+    uint32_t next;
+    int next_n;
+    utf8_decode_one(s + off, &next, &next_n);
+
+    if (is_variation_selector_16(next)) {
+      has_vs16 = true;
+      off += (size_t)next_n;
+      continue;
+    }
+
+    if ((next >= 0x0300 && next <= 0x036f) ||
+        (next >= 0x1f3fb && next <= 0x1f3ff)) {
+      off += (size_t)next_n;
+      continue;
+    }
+
+    if (next == 0x200d) {
+      has_zwj = true;
+      off += (size_t)next_n;
+      if (!s[off])
+        break;
+      utf8_decode_one(s + off, &next, &next_n);
+      off += (size_t)next_n;
+      continue;
+    }
+
+    break;
+  }
+
+  if (has_zwj || (has_vs16 && w > 0))
+    w = 2;
+  if (is_zero_width_codepoint(cp))
+    w = 0;
+  if (width)
+    *width = w;
+  return off;
+}
+
 static int display_width(const char *s) {
   int width = 0;
   for (size_t off = 0; s && s[off];) {
-    uint32_t cp;
-    int n;
-    utf8_decode_one(s + off, &cp, &n);
-    width += codepoint_width(cp);
-    off += (size_t)n;
+    int w;
+    off += cluster_width_at(s + off, &w);
+    width += w;
   }
   return width;
 }
 
-static void pad_display(const char *s, int width) {
-  int pad = width - display_width(s);
-  while (pad-- > 0)
+static size_t prefix_for_width(const char *s, int max_width, int *used_width) {
+  size_t off = 0;
+  int width = 0;
+  while (s && s[off]) {
+    int w;
+    size_t n = cluster_width_at(s + off, &w);
+    if (width + w > max_width)
+      break;
+    width += w;
+    off += n;
+  }
+  if (used_width)
+    *used_width = width;
+  return off;
+}
+
+static int current_indent_width(MdRender *r) {
+  return r->quote_depth * 2 + r->list_depth * 2;
+}
+
+static int code_inner_width(MdRender *r) {
+  int cols = terminal_columns();
+  int width = cols - current_indent_width(r) - 4; /* borders + spaces */
+  if (width < 24)
+    width = 24;
+  if (width > 96)
+    width = 96;
+  return width;
+}
+
+static void print_rule(int width) {
+  for (int i = 0; i < width; i++)
+    fputs("─", stdout);
+}
+
+static void render_code_line(MdRender *r) {
+  r->code_line[r->code_line_len] = '\0';
+  start_line(r);
+  md_esc(ESC_GRAY);
+  fputs("│ ", stdout);
+
+  int used = 0;
+  size_t n = prefix_for_width(r->code_line, r->code_width, &used);
+  fwrite(r->code_line, 1, n, stdout);
+  for (int pad = used; pad < r->code_width; pad++)
     putchar(' ');
+
+  fputs(" │", stdout);
+  md_esc(ESC_RESET);
+  newline(r);
+  r->code_line_len = 0;
+}
+
+static void append_code_text(MdRender *r, const char *text, MD_SIZE size) {
+  if (r->code_text_len + size >= sizeof(r->code_text))
+    size = (MD_SIZE)(sizeof(r->code_text) - r->code_text_len - 1);
+  if (size > 0) {
+    memcpy(r->code_text + r->code_text_len, text, size);
+    r->code_text_len += size;
+    r->code_text[r->code_text_len] = '\0';
+  }
+}
+
+static bool code_text_is_box_art(const char *text) {
+  if (!text)
+    return false;
+  return strstr(text, "┌") || strstr(text, "└") || strstr(text, "│") ||
+         strstr(text, "├") || strstr(text, "┬") || strstr(text, "┼");
+}
+
+static void render_code_art(MdRender *r) {
+  const char *p = r->code_text;
+  while (*p) {
+    const char *nl = strchr(p, '\n');
+    size_t len = nl ? (size_t)(nl - p) : strlen(p);
+    start_line(r);
+    md_esc(ESC_GRAY);
+    fwrite(p, 1, len, stdout);
+    md_esc(ESC_RESET);
+    newline(r);
+    p = nl ? nl + 1 : p + len;
+  }
+}
+
+static void render_code_box(MdRender *r) {
+  r->code_width = code_inner_width(r);
+  start_line(r);
+  md_esc(ESC_GRAY);
+  fputs("┌", stdout);
+  if (r->code_lang[0]) {
+    printf(" %s ", r->code_lang);
+    int label_width = display_width(r->code_lang) + 2;
+    if (label_width > r->code_width)
+      label_width = r->code_width;
+    print_rule(r->code_width - label_width);
+  } else {
+    print_rule(r->code_width);
+  }
+  fputs("┐", stdout);
+  md_esc(ESC_RESET);
+  newline(r);
+
+  r->code_line_len = 0;
+  for (size_t i = 0; i < r->code_text_len; i++) {
+    char ch = r->code_text[i];
+    if (ch == '\n') {
+      render_code_line(r);
+      continue;
+    }
+    if (r->code_line_len + 1 < sizeof(r->code_line))
+      r->code_line[r->code_line_len++] = ch;
+  }
+  if (r->code_line_len > 0)
+    render_code_line(r);
+
+  start_line(r);
+  md_esc(ESC_GRAY);
+  fputs("└", stdout);
+  print_rule(r->code_width);
+  fputs("┘", stdout);
+  md_esc(ESC_RESET);
+  newline(r);
+}
+
+static void render_code_block(MdRender *r) {
+  r->code_text[r->code_text_len] = '\0';
+  if (code_text_is_box_art(r->code_text))
+    render_code_art(r);
+  else
+    render_code_box(r);
+  r->code_text_len = 0;
+  r->code_line_len = 0;
 }
 
 static void table_append(MdRender *r, const char *text, MD_SIZE size) {
@@ -175,6 +376,24 @@ static void render_table(MdRender *r) {
     if (widths[col] < 3)
       widths[col] = 3;
 
+  int max_table_width = terminal_columns() - current_indent_width(r);
+  if (max_table_width < 24)
+    max_table_width = 24;
+  int total_width = 1;
+  for (int col = 0; col < cols; col++)
+    total_width += widths[col] + 3;
+
+  while (total_width > max_table_width) {
+    int widest = 0;
+    for (int col = 1; col < cols; col++)
+      if (widths[col] > widths[widest])
+        widest = col;
+    if (widths[widest] <= 8)
+      break;
+    widths[widest]--;
+    total_width--;
+  }
+
   start_line(r);
   md_esc(ESC_GRAY);
   fputs("┌", stdout);
@@ -195,9 +414,12 @@ static void render_table(MdRender *r) {
       putchar(' ');
       if (r->table_header[row])
         md_esc(ESC_BOLD);
-      fputs(r->table_cells[row][col], stdout);
+      int used = 0;
+      size_t n = prefix_for_width(r->table_cells[row][col], widths[col], &used);
+      fwrite(r->table_cells[row][col], 1, n, stdout);
       md_esc(ESC_RESET);
-      pad_display(r->table_cells[row][col], widths[col]);
+      for (int pad = used; pad < widths[col]; pad++)
+        putchar(' ');
       putchar(' ');
       md_esc(ESC_GRAY);
       fputs("│", stdout);
@@ -300,22 +522,7 @@ static void print_render_text(MdRender *r, const char *text, MD_SIZE size) {
   }
 
   if (r->in_code_block) {
-    md_esc(ESC_GRAY);
-    for (MD_SIZE i = 0; i < size; i++) {
-      if (!r->code_line_open) {
-        start_line(r);
-        fputs("│ ", stdout);
-        r->code_line_open = true;
-      }
-      putchar(text[i]);
-      if (text[i] == '\n') {
-        r->at_line_start = true;
-        r->code_line_open = false;
-      } else {
-        r->at_line_start = false;
-      }
-    }
-    md_esc(ESC_RESET);
+    append_code_text(r, text, size);
     return;
   }
 
@@ -384,24 +591,11 @@ static int enter_block(MD_BLOCKTYPE type, void *detail, void *userdata) {
     MD_BLOCK_CODE_DETAIL *d = detail;
     attr_copy(r->code_lang, sizeof(r->code_lang), d ? &d->lang : NULL);
     maybe_block_gap(r);
-    ensure_line_start(r);
-    start_line(r);
-    md_esc(ESC_GRAY);
-    fputs("┌", stdout);
-    if (r->code_lang[0]) {
-      printf(" %s ", r->code_lang);
-      int label_width = display_width(r->code_lang) + 2;
-      for (int i = label_width; i < 42; i++)
-        fputs("─", stdout);
-    } else {
-      for (int i = 0; i < 42; i++)
-        fputs("─", stdout);
-    }
-    fputs("┐", stdout);
-    md_esc(ESC_RESET);
-    newline(r);
     r->in_code_block = true;
     r->code_line_open = false;
+    r->code_line_len = 0;
+    r->code_text_len = 0;
+    r->code_text[0] = '\0';
     break;
   }
   case MD_BLOCK_P:
@@ -472,18 +666,9 @@ static int leave_block(MD_BLOCKTYPE type, void *detail, void *userdata) {
     r->need_block_gap = true;
     break;
   case MD_BLOCK_CODE:
-    if (!r->at_line_start)
-      newline(r);
+    render_code_block(r);
     r->in_code_block = false;
     r->code_line_open = false;
-    start_line(r);
-    md_esc(ESC_GRAY);
-    fputs("└", stdout);
-    for (int i = 0; i < 42; i++)
-      fputs("─", stdout);
-    fputs("┘", stdout);
-    md_esc(ESC_RESET);
-    newline(r);
     r->code_lang[0] = '\0';
     r->need_block_gap = true;
     break;

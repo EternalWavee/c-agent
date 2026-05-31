@@ -229,6 +229,23 @@ static void format_size(long bytes, char *buf, size_t cap) {
     snprintf(buf, cap, "%.0f%s", value, units[unit]);
 }
 
+static void format_session_date(const char *iso, char *buf, size_t cap) {
+  static const char *months[] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  };
+  int year = 0, month = 0, day = 0, hour = 0, min = 0;
+  if (iso &&
+      sscanf(iso, "%d-%d-%dT%d:%d", &year, &month, &day, &hour, &min) == 5 &&
+      month >= 1 && month <= 12 && day >= 1 && day <= 31 &&
+      hour >= 0 && hour <= 23 && min >= 0 && min <= 59) {
+    (void)year;
+    snprintf(buf, cap, "%s %d %02d:%02d", months[month - 1], day, hour, min);
+    return;
+  }
+  snprintf(buf, cap, "unknown");
+}
+
 
 
 static bool utf8_decode_one(const char *s, uint32_t *cp, int *bytes) {
@@ -321,10 +338,13 @@ static void render_session_menu(SessionEntry *entries, int count, int selected,
     const char *label = entries[i].name[0] ? entries[i].name : entries[i].session_id;
     const char *active = strcmp(entries[i].session_id, session_current_id() ? session_current_id() : "") == 0 ? "*" : " ";
     char size[16];
+    char date[32];
     format_size(entries[i].size_bytes, size, sizeof(size));
+    format_session_date(entries[i].updated, date, sizeof(date));
 
-    char right[64];
-    snprintf(right, sizeof(right), "%4d msg  %8s", entries[i].message_count, size);
+    char right[96];
+    snprintf(right, sizeof(right), "%s  %4d msg  %8s", date,
+             entries[i].message_count, size);
 
     int rows, cols;
     terminal_size(&rows, &cols);
