@@ -28,7 +28,7 @@ This project is the course design for **CS2313 Operating Systems** at Shanghai J
 - **Project memory** — `.agent/memory/` index plus six typed files for persistent project knowledge
 - **Sandbox safety** — all file paths confined to the workspace directory
 - **Dangerous command filter** — blocks destructive shell patterns before execution
-- **Terminal UI** — real-time spinner and per-tool status display
+- **Terminal UI** — real-time spinner, per-tool status display, and Markdown terminal rendering
 
 ---
 
@@ -336,7 +336,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 - [x] Context summary (LLM-based history compression)
 - [x] Session persistence (append-only log + checkpoint, crash recovery, auto-naming)
 - [x] Project memory (.agent/memory/ index + six typed files) with filtering, delete, and update
-- [x] Terminal UI with spinner and per-tool status
+- [x] Terminal UI with spinner, per-tool status, and Markdown rendering
 - [x] SubAgent (background child agents for parallel independent subtasks)
 
 ### Planned
@@ -380,3 +380,10 @@ export API_KEY="your-key"
 ```
 
 The agent will automatically write the file, compile it, run it, and report the output.
+
+---
+
+## Acknowledgements
+
+- [cJSON](https://github.com/DaveGamble/cJSON) — the lightweight C JSON parser used by this project.
+- [MD4C](https://github.com/mity/md4c) — the Markdown parser used to render model replies into clearer terminal output. Thanks to MD4C author Martin Mitáš and contributors.

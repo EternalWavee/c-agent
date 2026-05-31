@@ -5,6 +5,7 @@
 #include "memory.h"
 #include "session.h"
 #include "skills.h"
+#include "ui/markdown.h"
 #include "ui/ui.h"
 
 #include <stdio.h>
@@ -57,7 +58,7 @@ int main(void) {
     const char *reply = agent_chat(a, input);
     if (reply) {
       ui_idle();
-      printf("%s\n", reply);
+      ui_print_markdown(reply);
       /* Append new messages to session log (interactive only) */
       if (isatty(STDIN_FILENO)) {
         if (session_append(a, prev_count) < 0)

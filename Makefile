@@ -40,8 +40,8 @@ CORE_SRCS  := main.c cmd.c session.c memory.c skills.c config.c message.c util.c
 SRCS := $(CORE_SRCS) $(EXTRA_SRCS)
 
 BUILD     := build
-OBJS      := $(SRCS:%.c=$(BUILD)/%.o) $(BUILD)/cJSON.o
-DEPS      := $(SRCS:%.c=$(BUILD)/%.d) $(BUILD)/cJSON.d
+OBJS      := $(SRCS:%.c=$(BUILD)/%.o) $(BUILD)/cJSON.o $(BUILD)/md4c.o
+DEPS      := $(SRCS:%.c=$(BUILD)/%.d) $(BUILD)/cJSON.d $(BUILD)/md4c.d
 TARGET    := $(BUILD)/c-agent
 ASAN_TGT  := $(BUILD)/c-agent-asan
 TSAN_TGT  := $(BUILD)/c-agent-tsan
@@ -65,6 +65,10 @@ $(BUILD)/%.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/cJSON.o: libs/cJSON.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/md4c.o: libs/md4c.c
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
