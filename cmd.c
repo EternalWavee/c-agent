@@ -5,6 +5,8 @@
 #include "config.h"
 #include "memory.h"
 #include "session.h"
+#include "ui/markdown.h"
+#include "ui/ui.h"
 
 #include <stdio.h>
 #include <stdlib.h>
