@@ -53,7 +53,10 @@ int memory_update(int index, const char *content, MemoryType type);
 void memory_observe(const char *tool_name, const char *tool_args,
                     const char *tool_output);
 
-/* Consolidate observations. Currently clears pending observations; future work uses a restricted memory subagent. */
+/* Number of pending short-term observations waiting for manual consolidation */
+int  memory_observation_count(void);
+
+/* Consolidate observations with a restricted memory LLM. */
 int  memory_consolidate(char *err, size_t err_cap);
 
 /* Build system prompt snippet from typed memory files (caller frees) */

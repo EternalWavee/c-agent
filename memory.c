@@ -1,6 +1,9 @@
 #include "memory.h"
 
+#include "agent/llm_client.h"
+#include "cJSON.h"
 #include "config.h"
+#include "message.h"
 #include "util.h"
 
 #include <errno.h>
@@ -110,6 +113,10 @@ static void obs_add(const char *content, MemoryType type) {
     obs_buf[obs_count].content = xstrdup(content);
     obs_buf[obs_count].type = type;
     obs_count++;
+}
+
+int memory_observation_count(void) {
+    return obs_count;
 }
 
 /* ── Small file helpers ──────────────────────────────────────────── */
@@ -571,17 +578,119 @@ void memory_observe(const char *tool_name, const char *tool_args,
     obs_add(content, type);
 }
 
-/* ── Consolidation ─────────────────────────────────────────────────
- *
- * Automatic two-call LLM consolidation is intentionally disabled. The next
- * iteration should use a restricted memory subagent that edits .agent/memory/.
- */
+/* ── Consolidation ───────────────────────────────────────────────── */
+
+static char *observations_to_text(void) {
+    size_t cap = 4096, len = 0;
+    char *buf = xmalloc(cap);
+    buf[0] = '\0';
+    for (int i = 0; i < obs_count; i++) {
+        append_fmt(&buf, &len, &cap, "- [%s] %s\n",
+                   memory_type_str(obs_buf[i].type), obs_buf[i].content);
+    }
+    return buf;
+}
+
+static int remember_from_json(cJSON *root) {
+    cJSON *items = cJSON_GetObjectItem(root, "memories");
+    if (!items || !cJSON_IsArray(items))
+        return 0;
+
+    int saved = 0;
+    int count = cJSON_GetArraySize(items);
+    if (count > 5)
+        count = 5;
+
+    for (int i = 0; i < count; i++) {
+        cJSON *item = cJSON_GetArrayItem(items, i);
+        const char *type_str = cJSON_GetStringValue(cJSON_GetObjectItem(item, "type"));
+        const char *content = cJSON_GetStringValue(cJSON_GetObjectItem(item, "content"));
+        if (!content || !content[0])
+            continue;
+        MemoryType type = parse_type_name(type_str);
+        if (memory_remember(content, type) == 0)
+            saved++;
+    }
+    return saved;
+}
+
+static cJSON *parse_memory_json(const char *text) {
+    if (!text)
+        return NULL;
+
+    cJSON *root = cJSON_Parse(text);
+    if (root)
+        return root;
+
+    const char *start = strchr(text, '{');
+    const char *end = strrchr(text, '}');
+    if (!start || !end || end <= start)
+        return NULL;
+
+    size_t len = (size_t)(end - start + 1);
+    char *slice = xmalloc(len + 1);
+    memcpy(slice, start, len);
+    slice[len] = '\0';
+    root = cJSON_Parse(slice);
+    free(slice);
+    return root;
+}
 
 int memory_consolidate(char *err, size_t err_cap) {
-    (void)err;
-    (void)err_cap;
+    if (obs_count <= 0)
+        return 0;
+
+    char *obs = observations_to_text();
+    char *existing = memory_recall();
+    char *prompt = xasprintf(
+        "Observed tool activity from this session:\n%s\n"
+        "Existing project memory:\n%s\n\n"
+        "Decide which observations are durable, useful project memories. "
+        "Save only stable facts, user preferences, architecture decisions, build/test workflows, or real bugs/fixes. "
+        "Do not save routine read_file/bash logs, transient command output, temporary failures, or vague facts. "
+        "Return strict JSON only, with at most 5 items, in this exact shape:\n"
+        "{\"memories\":[{\"type\":\"workflow|architecture|pattern|preference|bug|fact\",\"content\":\"concise memory\"}]}\n"
+        "If nothing is worth saving, return {\"memories\":[]}.",
+        obs, existing ? existing : "(none)");
+
+    MessageList msgs;
+    msg_list_init(&msgs);
+    msg_list_push(&msgs, msg_user_json(prompt));
+
+    const char *system =
+        "You are a restricted memory consolidator for a coding agent. "
+        "You do not call tools. You only return strict JSON. "
+        "Be conservative: fewer high-value memories are better than noisy logs.";
+
+    LLMResponse resp;
+    memset(&resp, 0, sizeof(resp));
+    int rc = llm_chat(&msgs, system, g_config.model, &resp, err, err_cap);
+    msg_list_free(&msgs);
+    free(prompt);
+    free(obs);
+    free(existing);
+
+    if (rc != 0)
+        return -1;
+
+    if (resp.n_tool_calls > 0) {
+        llm_response_free(&resp);
+        snprintf(err, err_cap, "memory consolidator unexpectedly requested tools");
+        return -1;
+    }
+
+    cJSON *root = parse_memory_json(resp.content);
+    if (!root) {
+        snprintf(err, err_cap, "memory consolidator returned invalid JSON");
+        llm_response_free(&resp);
+        return -1;
+    }
+
+    int saved = remember_from_json(root);
+    cJSON_Delete(root);
+    llm_response_free(&resp);
     obs_clear();
-    return 0;
+    return saved;
 }
 
 /* ── System prompt injection ─────────────────────────────────────── */

@@ -3,6 +3,7 @@
 #include "agent/agent.h"
 #include "agent/llm_client.h"
 #include "config.h"
+#include "memory.h"
 #include "session.h"
 
 #include <stdio.h>
@@ -479,20 +480,48 @@ static void cmd_session(const char *args, Agent *a) {
 }
 
 static void cmd_memory(const char *args, Agent *a) {
+  (void)a;
   if (args[0] != '\0') {
-    fprintf(stderr, "Usage: /memory — summarize and save what you learned\n");
+    fprintf(stderr, "Usage: /memory - summarize and save what you learned\n");
     return;
   }
-  /* Ask the LLM to summarize what it learned and save to memory */
+
+  if (memory_observation_count() == 0) {
+    printf("No tool observations to consolidate yet.\n");
+    return;
+  }
+
+  char err[512];
+  int saved = memory_consolidate(err, sizeof(err));
+  if (saved < 0) {
+    fprintf(stderr, "Memory consolidation failed: %s\n", err);
+  } else if (saved == 0) {
+    printf("Reviewed observations, but nothing was worth remembering.\n");
+  } else {
+    printf("Saved %d memory entr%s.\n", saved, saved == 1 ? "y" : "ies");
+  }
+}
+
+static void cmd_remember(const char *args, Agent *a) {
+  if (args[0] != '\0') {
+    fprintf(stderr, "Usage: /remember - ask the main agent to save important conversation memory\n");
+    return;
+  }
+
   const char *prompt =
-      "Look at our conversation so far. Use the remember tool to save "
-      "anything important you learned about this project — architecture, "
-      "conventions, key files, build commands, user preferences, decisions. "
-      "Be specific and concise. Call remember once for each distinct piece of knowledge. "
-      "If nothing noteworthy, say 'Nothing to remember yet.'";
+      "Review our conversation so far. Use the remember tool to save any "
+      "important durable information about this project, the user's preferences, "
+      "architecture decisions, build/test workflows, key files, repeated bugs, "
+      "or explicit corrections. Be specific and concise. Call remember once for "
+      "each distinct high-value memory. Do not save routine command output, "
+      "temporary plans, jokes, or anything the user may not want stored. If "
+      "nothing is worth saving, say so briefly.";
+
   const char *reply = agent_chat(a, prompt);
-  if (reply)
-    printf("%s\n", reply);
+  if (reply) {
+    ui_idle();
+    ui_print_markdown(reply);
+  }
 }
 
 static void cmd_help(void) {
@@ -503,7 +532,8 @@ static void cmd_help(void) {
   printf("  /session name X   Rename current session\n");
   printf("  /session delete X Delete a session\n");
   printf("  /session restore X Restore a session by id\n");
-  printf("  /memory           Show project memory\n");
+  printf("  /memory           Consolidate observed facts into project memory\n");
+  printf("  /remember         Ask the main agent to save conversation memory\n");
   printf("  /help             Show this help\n");
   printf("  exit/quit/q       Exit\n");
 }
@@ -524,6 +554,10 @@ int cmd_dispatch(const char *input, Agent *a) {
     const char *args = input + 7;
     while (*args == ' ') args++;
     cmd_memory(args, a);
+  } else if (strncmp(input, "/remember", 9) == 0) {
+    const char *args = input + 9;
+    while (*args == ' ') args++;
+    cmd_remember(args, a);
   } else if (strcmp(input, "/help") == 0) {
     cmd_help();
   } else {

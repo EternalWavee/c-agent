@@ -2,7 +2,6 @@
 
 #include "config.h"
 #include "libs/cJSON.h"
-#include "memory.h"
 #include "util.h"
 
 #include <dirent.h>
@@ -623,11 +622,6 @@ void session_shutdown(Agent *a) {
             remove_session_dir_files(current_session_id);
         }
     }
-
-    /* Consolidate short-term observations into long-term memory */
-    char err[256];
-    if (memory_consolidate(err, sizeof(err)) < 0)
-        fprintf(stderr, "[memory] consolidate failed: %s\n", err);
 
     current_session_id[0] = '\0';
 }
