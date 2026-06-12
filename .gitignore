@@ -31,6 +31,9 @@ Thumbs.db
 # handout
 handout*.md
 
+# Local showcase drafts
+doc/
+
 #session && offload
 .agent/
 

@@ -104,7 +104,8 @@ caddy reverse-proxy --from :18080 --to https://models.sjtu.edu.cn --change-host-
 | `/session name X` | 重命名当前会话 |
 | `/session delete X` | 删除指定会话 |
 | `/session restore X` | 按 ID 恢复会话 |
-| `/memory` | 让 Agent 调用 `remember` 保存本轮学到的重要知识 |
+| `/memory` | 触发离线 memory consolidation，将工具观察结果提炼为项目记忆条目 |
+| `/remember` | 让主 Agent 回顾当前对话，主动调用 `remember` 保存值得长期保存的信息 |
 | `/help` | 显示帮助信息 |
 | `exit` / `quit` / `q` | 退出 |
 
@@ -135,7 +136,20 @@ caddy reverse-proxy --from :18080 --to https://models.sjtu.edu.cn --change-host-
 
 ---
 
-## 上下文管理
+## 工具生命周期钩子
+
+`hooks.c` 实现了一个轻量的发布-订阅机制，在工具调用的两个时间点触发回调：
+
+- **`HOOK_BEFORE_TOOL`** — 工具执行前触发，此时 `result` 字段为 NULL
+- **`HOOK_AFTER_TOOL`** — 工具执行后触发，携带完整的输入参数和输出结果
+
+调用方（`tools/executor.c`）在每次并发或串行调度工具时都会 emit 这两个事件；订阅方通过 `hooks_register` 注册自己的回调函数，最多每个事件 16 个。
+
+目前注册的唯一内置钩子是 **`memory_tool_hook`**：在每次工具执行后把 `(工具名, 参数, 输出)` 写入短期观察缓冲区（`memory_observe`）。这是 `/memory` 命令的数据来源——用户执行 `/memory` 时，consolidation 流程读取这批观察记录，让 LLM 从中提炼值得长期保存的项目知识并写入 `.agent/memory/`。
+
+---
+
+
 
 当对话历史过长时，两个策略会在每次 LLM 请求前自动回收空间：
 
@@ -288,6 +302,7 @@ make test-tsan          # ThreadSanitizer 并发测试
 ├── session.c               # 会话持久化（日志 + checkpoint）
 ├── memory.c                # 项目记忆（.agent/memory/ 索引 + typed files）
 ├── skills.c                # 技能扫描和 SKILL.md 加载
+├── hooks.c                 # 工具生命周期钩子（before/after tool）
 ├── cmd.c                   # 斜杠命令分发
 ├── config.c                # 环境变量配置
 ├── agent/
@@ -308,13 +323,18 @@ make test-tsan          # ThreadSanitizer 并发测试
 │   ├── write.c             # 文件写入
 │   ├── edit.c              # 子串替换
 │   ├── memory_tool.c       # remember + recall + delete + update 工具
-│   ├── skill_tool.c        # load_skill 工具
-│   └── subagent.c          # 后台子智能体（spawn/status/wait）
+│   ├── skill_tool.c        # load_skill + install_skill 工具
+│   ├── subagent.c          # 后台子智能体（spawn/status/wait）
+│   ├── web_fetch.c         # HTTP/HTTPS 抓取
+│   ├── web_search.c        # Bing RSS 搜索
+│   └── current_time.c      # 当前系统时间
 ├── ui/
 │   ├── ui.c                # 事件分发
-│   └── render.c            # 终端渲染线程
+│   ├── render.c            # 终端渲染线程
+│   └── markdown.c          # Markdown 终端渲染（md4c 封装）
 ├── libs/
-│   └── cJSON/              # JSON 解析库
+│   ├── cJSON.c / cJSON.h   # JSON 解析库
+│   └── md4c.c / md4c.h     # Markdown 解析库
 ├── start.sh                # 一键启动：caddy 代理 + agent
 └── Makefile
 ```
@@ -340,10 +360,8 @@ make test-tsan          # ThreadSanitizer 并发测试
 ### 计划中
 
 - [ ] **评测框架** — 端到端场景基准测试与指标收集
-- [x] **子智能体** — 后台子智能体并行执行独立子任务
-- [x] **记忆系统** — 跨会话的项目级知识持久化，支持过滤、删除、更新
-- [x] **子智能体** — 后台子智能体并行执行独立子任务
-- [x] **技能系统** — 扫描 `.agent/skills/<name>/SKILL.md` metadata，按需 `load_skill` 注入完整说明
+- [ ] **流式输出** — 逐 token 显示 LLM 响应，降低感知延迟
+- [ ] **插件架构** — 支持用户通过共享库或配置文件在运行时注册自定义工具
 
 ---
 
@@ -351,7 +369,7 @@ make test-tsan          # ThreadSanitizer 并发测试
 
 **当前不足：**
 
-- **内置工具较少** — 基础工具 4 个（`bash`、`read_file`、`write_file`、`edit_file`），扩展工具 7 个（记忆管理、子智能体），但缺少 Web 搜索、代码索引、diff 查看、git 操作等常见能力
+- **内置工具较少** — 目前已有 16 个工具，基础工具（`bash`、`read_file`、`write_file`、`edit_file`）+ 记忆管理（`remember`/`recall`/`memory_delete`/`memory_update`）+ 子智能体（`subagent_spawn`/`subagent_status`/`subagent_wait`）+ 联网（`web_fetch`/`web_search`）+ 技能系统（`load_skill`/`install_skill`）+ `current_time`；缺少代码索引、diff 查看、git 等常见能力
 - **无流式输出** — LLM 响应需完整接收后才显示，长回复时体验较差
 - **单一模型** — 不支持灵活切换 LLM 提供商或为不同任务混合使用模型
 - **Token 估算粗糙** — 使用字符数近似估算，非真实 tokenizer，预算阈值可能过早或过晚触发
@@ -359,7 +377,7 @@ make test-tsan          # ThreadSanitizer 并发测试
 
 **改进方向：**
 
-- **丰富工具生态** — 新增 `grep`、`find`、`git`、`web_fetch`、`web_search`、`code_search` 等工具，覆盖更复杂的工作流
+- **丰富工具生态** — 新增 `grep`、`find`、`git`、`code_search` 等工具，覆盖更复杂的工作流
 - **流式输出** — 逐 token 显示 LLM 响应，降低感知延迟
 - **插件架构** — 支持用户通过共享库或配置文件在运行时注册自定义工具
 - **更智能的上下文策略** — 使用真实 tokenizer（如 tiktoken），实现基于优先级的淘汰（保留高价值工具结果，丢弃低信息量对话）

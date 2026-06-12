@@ -106,7 +106,8 @@ caddy reverse-proxy --from :18080 --to https://models.sjtu.edu.cn --change-host-
 | `/session name X` | Rename current session |
 | `/session delete X` | Delete a session |
 | `/session restore X` | Restore a session by id |
-| `/memory` | Ask the agent to call `remember` for important knowledge learned in the current conversation |
+| `/memory` | Trigger offline memory consolidation — distill tool observations into project memory entries |
+| `/remember` | Ask the main agent to review the conversation and call `remember` for durable items |
 | `/help` | Show available commands |
 | `exit` / `quit` / `q` | Exit |
 
@@ -137,7 +138,20 @@ Read-only tools are automatically dispatched in parallel. State-changing tools r
 
 ---
 
-## Context Management
+## Tool Lifecycle Hooks
+
+`hooks.c` implements a lightweight publish-subscribe mechanism that fires callbacks at two points around every tool call:
+
+- **`HOOK_BEFORE_TOOL`** — fires before execution; `result` is NULL at this point
+- **`HOOK_AFTER_TOOL`** — fires after execution with the full input args and output result
+
+The dispatcher (`tools/executor.c`) emits both events for every parallel or serial tool invocation. Subscribers register with `hooks_register`; up to 16 callbacks per event are supported.
+
+The only built-in hook registered today is **`memory_tool_hook`**: after each tool call it appends `(tool_name, args, output)` to an in-memory observation buffer via `memory_observe`. This is the data source for the `/memory` command — when the user runs `/memory`, the consolidation pass feeds those observations to a restricted LLM call that extracts durable project knowledge and writes it to `.agent/memory/`.
+
+---
+
+
 
 When the conversation grows too large, two policies reclaim space before each LLM request:
 
@@ -290,6 +304,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 ├── session.c               # Session persistence (log + checkpoint)
 ├── memory.c                # Project memory (.agent/memory/ index + typed files)
 ├── skills.c                # Skill metadata scanning and SKILL.md loading
+├── hooks.c                 # Tool lifecycle hooks (before/after tool events)
 ├── cmd.c                   # Slash command dispatch
 ├── config.c                # Environment-based configuration
 ├── agent/
@@ -310,13 +325,18 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 │   ├── write.c             # File writer
 │   ├── edit.c              # Substring replacement
 │   ├── memory_tool.c       # remember + recall + delete + update tools
-│   ├── skill_tool.c        # load_skill tool
-│   └── subagent.c          # Background child agents (spawn/status/wait)
+│   ├── skill_tool.c        # load_skill + install_skill tools
+│   ├── subagent.c          # Background child agents (spawn/status/wait)
+│   ├── web_fetch.c         # HTTP/HTTPS fetcher
+│   ├── web_search.c        # Bing RSS search
+│   └── current_time.c      # Current system time
 ├── ui/
 │   ├── ui.c                # Event dispatch
-│   └── render.c            # Terminal rendering thread
+│   ├── render.c            # Terminal rendering thread
+│   └── markdown.c          # Markdown terminal rendering (md4c wrapper)
 ├── libs/
-│   └── cJSON/              # JSON parser
+│   ├── cJSON.c / cJSON.h   # JSON parser
+│   └── md4c.c / md4c.h     # Markdown parser
 ├── start.sh                # One-liner: caddy proxy + agent
 └── Makefile
 ```
@@ -342,10 +362,8 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 ### Planned
 
 - [ ] **Evaluation harness** — end-to-end benchmark scenarios with metrics
-- [x] **SubAgent** — spawn child agents for independent subtasks
-- [x] **Memory** — project-level knowledge persistence across sessions, with filtering, delete, and update
-- [x] **SubAgent** — background child agents for parallel independent subtasks
-- [x] **Skill system** — scans `.agent/skills/<name>/SKILL.md` metadata and loads full instructions with `load_skill`
+- [ ] **Streaming output** — display LLM responses token-by-token for better perceived latency
+- [ ] **Plugin architecture** — allow users to register custom tools at runtime via shared libraries or config files
 
 ---
 
@@ -353,7 +371,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 
 **Current limitations:**
 
-- **Limited tool set** — 4 base tools (`bash`, `read_file`, `write_file`, `edit_file`) plus 8 extended tools (memory management, sub-agents). Still missing common capabilities like web search, codebase indexing, diff viewing, and git operations.
+- **Limited tool set** — 16 tools total: base tools (`bash`, `read_file`, `write_file`, `edit_file`) + memory management (`remember`/`recall`/`memory_delete`/`memory_update`) + sub-agents (`subagent_spawn`/`subagent_status`/`subagent_wait`) + web access (`web_fetch`/`web_search`) + skill system (`load_skill`/`install_skill`) + `current_time`; still missing codebase indexing, diff viewing, and git operations
 - **No streaming** — LLM responses are received in full before display. Long responses feel unresponsive.
 - **Single-model support** — no easy way to switch between different LLM providers or mix models for different tasks.
 - **Basic context heuristics** — the token estimator is a rough character-count heuristic, not a real tokenizer. Budget thresholds may fire too early or too late.
@@ -361,7 +379,7 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 
 **Potential improvements:**
 
-- **Richer tool ecosystem** — add tools like `grep`, `find`, `git`, `web_fetch`, `web_search`, `code_search` to handle more complex workflows
+- **Richer tool ecosystem** — add tools like `grep`, `find`, `git`, `code_search` to handle more complex workflows
 - **Streaming output** — display LLM responses token-by-token for better perceived latency
 - **Plugin architecture** — allow users to register custom tools at runtime via shared libraries or config files
 - **Smarter context policies** — use actual tokenizers (tiktoken) and implement priority-based eviction (e.g. keep high-value tool results, drop low-info chat)
