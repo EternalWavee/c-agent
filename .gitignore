@@ -40,3 +40,5 @@ doc/
 #codegraph && code agent
 .codegraph/
 .claude/
+
+*.tex

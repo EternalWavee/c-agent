@@ -19,7 +19,7 @@ CC      ?= cc
 EXTRA_CFLAGS ?=
 EXTRA_SRCS ?=
 CFLAGS  := -D_XOPEN_SOURCE=700 -std=c11 -Wall -Wextra -pedantic \
-           -Wno-format-truncation -g -MMD -MP -I. -Ilibs $(EXTRA_CFLAGS)
+           -Wno-format-truncation -g -MMD -MP -I. -Icore -Ilibs $(EXTRA_CFLAGS)
 # 静音warning snprintf 拼接 workdir + "/" + rel_path 时，编译器理论上算出两个字符串加起来可能超过4096字节会截断。但实际使用中路径根本不会那么长，snprintf 截断也是安全行为
 # 还是不修改TA的sandbox比较好的
 LDLIBS  := -lpthread -lm
@@ -34,7 +34,7 @@ TOOL_SRCS  := $(sort $(wildcard tools/*.c))
 UI_SRCS    := $(sort $(wildcard ui/*.c))
 CTX_SRCS   := $(sort $(wildcard context/*.c))
 
-CORE_SRCS  := main.c cmd.c session.c memory.c skills.c config.c message.c util.c http.c hooks.c \
+CORE_SRCS  := main.c core/cmd.c core/session.c core/memory.c core/skills.c core/config.c core/message.c core/util.c core/http.c core/hooks.c \
               $(AGENT_SRCS) $(TOOL_SRCS) $(UI_SRCS) $(CTX_SRCS)
 
 SRCS := $(CORE_SRCS) $(EXTRA_SRCS)
@@ -113,7 +113,7 @@ test-agent-tsan: tsan
 
 # ── Pure-C unit tests ───────────────────────────────────────────────────
 
-CUNIT_CORE  := config.c message.c util.c
+CUNIT_CORE  := core/config.c core/message.c core/util.c
 CUNIT_TOOLS := tools/registry.c tools/sandbox.c \
                tools/bash.c tools/read.c tools/write.c tools/edit.c
 CUNIT_CTX_BASE := context/context.c context/token.c

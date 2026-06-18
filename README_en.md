@@ -9,7 +9,7 @@
 
 <p align="center">
   A lightweight, terminal-based coding agent written in pure C.<br/>
-  <a href="README.md">中文文档</a>
+  <a href="README.md">中文文档</a> · <a href="report.pdf">Report</a> · <a href="appendix.pdf">Appendix</a>
 </p>
 
 C Agent is a terminal-based coding assistant powered by LLM tool-calling. Users describe tasks in natural language, and the agent autonomously invokes tools — running shell commands, reading and writing files, editing code — to complete them. Built with a ReAct reasoning loop, parallel read-only execution, automatic context management (offload + summary), and workspace sandbox isolation.
@@ -301,15 +301,23 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 ```
 .
 ├── main.c                  # Entry point and REPL
-├── session.c               # Session persistence (log + checkpoint)
-├── memory.c                # Project memory (.agent/memory/ index + typed files)
-├── skills.c                # Skill metadata scanning and SKILL.md loading
-├── hooks.c                 # Tool lifecycle hooks (before/after tool events)
-├── cmd.c                   # Slash command dispatch
-├── config.c                # Environment-based configuration
+├── Makefile
+├── start.sh                # One-liner: caddy proxy + agent
+├── report.pdf              # Course design report
+├── appendix.pdf            # Appendix
+├── core/                   # Core modules
+│   ├── config.c/h          # Environment-based configuration
+│   ├── message.c/h         # Message structures
+│   ├── session.c/h         # Session persistence (log + checkpoint)
+│   ├── memory.c/h          # Project memory (.agent/memory/ index + typed files)
+│   ├── skills.c/h          # Skill metadata scanning and SKILL.md loading
+│   ├── hooks.c/h           # Tool lifecycle hooks (before/after tool events)
+│   ├── cmd.c/h             # Slash command dispatch
+│   ├── http.c/h            # HTTP client
+│   └── util.c/h            # Shared utilities
 ├── agent/
 │   ├── agent.c             # Core conversation loop (ReAct)
-│   ├── prompt.c           # System prompt assembly (rules, time, memory injection)
+│   ├── prompt.c            # System prompt assembly (rules, time, memory injection)
 │   └── llm_client.c        # HTTP transport + JSON wire format
 ├── context/
 │   ├── context.c           # Context budget and policy engine
@@ -334,11 +342,9 @@ make test-tsan          # concurrency tests under ThreadSanitizer
 │   ├── ui.c                # Event dispatch
 │   ├── render.c            # Terminal rendering thread
 │   └── markdown.c          # Markdown terminal rendering (md4c wrapper)
-├── libs/
-│   ├── cJSON.c / cJSON.h   # JSON parser
-│   └── md4c.c / md4c.h     # Markdown parser
-├── start.sh                # One-liner: caddy proxy + agent
-└── Makefile
+└── libs/
+    ├── cJSON.c / cJSON.h   # JSON parser
+    └── md4c.c / md4c.h     # Markdown parser
 ```
 
 ---

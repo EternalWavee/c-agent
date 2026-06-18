@@ -9,7 +9,7 @@
 
 <p align="center">
   一个轻量级的、基于终端的编程智能体，纯 C 实现。<br/>
-  <a href="README_en.md">English</a>
+  <a href="README_en.md">English</a> · <a href="report.pdf">课程报告</a> · <a href="appendix.pdf">附录</a>
 </p>
 
 C Agent 是一个基于 LLM 工具调用的终端编程助手。用户用自然语言描述任务，Agent 自动调用工具（执行 shell 命令、读写文件、编辑代码）来完成。核心特性包括 ReAct 多轮推理、只读工具并发执行、上下文自动管理（卸载 + 摘要）、工作区沙箱隔离。本项目为上海交通大学 CS2313 操作系统课程设计。
@@ -299,15 +299,23 @@ make test-tsan          # ThreadSanitizer 并发测试
 ```
 .
 ├── main.c                  # 入口和 REPL
-├── session.c               # 会话持久化（日志 + checkpoint）
-├── memory.c                # 项目记忆（.agent/memory/ 索引 + typed files）
-├── skills.c                # 技能扫描和 SKILL.md 加载
-├── hooks.c                 # 工具生命周期钩子（before/after tool）
-├── cmd.c                   # 斜杠命令分发
-├── config.c                # 环境变量配置
+├── Makefile
+├── start.sh                # 一键启动：caddy 代理 + agent
+├── report.pdf              # 课程设计报告
+├── appendix.pdf            # 附录
+├── core/                   # 核心模块
+│   ├── config.c/h          # 环境变量配置
+│   ├── message.c/h         # 消息结构
+│   ├── session.c/h         # 会话持久化（日志 + checkpoint）
+│   ├── memory.c/h          # 项目记忆（.agent/memory/ 索引 + typed files）
+│   ├── skills.c/h          # 技能扫描和 SKILL.md 加载
+│   ├── hooks.c/h           # 工具生命周期钩子（before/after tool）
+│   ├── cmd.c/h             # 斜杠命令分发
+│   ├── http.c/h            # HTTP 客户端
+│   └── util.c/h            # 通用工具函数
 ├── agent/
 │   ├── agent.c             # 核心对话循环（ReAct）
-│   ├── prompt.c           # System prompt 拼装（规则、时间、memory 注入）
+│   ├── prompt.c            # System prompt 拼装（规则、时间、memory 注入）
 │   └── llm_client.c        # HTTP 传输 + JSON 协议
 ├── context/
 │   ├── context.c           # 上下文预算和策略引擎
@@ -332,11 +340,9 @@ make test-tsan          # ThreadSanitizer 并发测试
 │   ├── ui.c                # 事件分发
 │   ├── render.c            # 终端渲染线程
 │   └── markdown.c          # Markdown 终端渲染（md4c 封装）
-├── libs/
-│   ├── cJSON.c / cJSON.h   # JSON 解析库
-│   └── md4c.c / md4c.h     # Markdown 解析库
-├── start.sh                # 一键启动：caddy 代理 + agent
-└── Makefile
+└── libs/
+    ├── cJSON.c / cJSON.h   # JSON 解析库
+    └── md4c.c / md4c.h     # Markdown 解析库
 ```
 
 ---
